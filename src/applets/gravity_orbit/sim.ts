@@ -11,7 +11,9 @@ import {
   type PitchPresetId
 } from "./earthPitch";
 import {
+  AU_KM,
   EARTH_YEAR_SIM_SECONDS,
+  NEAR_EARTH_HELIO_KM,
   NEAR_EARTH_VIEW_DEFAULT_KM,
   NEAR_EARTH_VIEW_MAX_KM,
   NEAR_EARTH_VIEW_MIN_KM,
@@ -114,22 +116,20 @@ function buildScenarioBodies(
     return [];
   }
 
+  if (scenario === "near-earth") {
+    return buildNearEarthBodies(center, viewHalfWidthKm);
+  }
+
   const maxOrbitPx = Math.min(LOGICAL_WIDTH, LOGICAL_HEIGHT) * 0.42;
   const bodies: NamedBody[] = [];
 
   for (const body of def.bodies) {
-    const orbitRadiusPx =
-      scenario === "solar-system"
-        ? solarOrbitRadiusPx(body.distance, maxOrbitPx)
-        : body.isCenter
-          ? 0
-          : (body.distance / viewHalfWidthKm) * maxOrbitPx;
+    const orbitRadiusPx = body.isCenter
+      ? 0
+      : solarOrbitRadiusPx(body.distance, maxOrbitPx);
 
     const angle = body.isCenter ? 0 : randomInRange(0, Math.PI * 2);
-    const omega =
-      scenario === "near-earth"
-        ? nearEarthOmega(body)
-        : omegaFromPeriodDays(body.periodDays);
+    const omega = omegaFromPeriodDays(body.periodDays);
 
     const position = body.isCenter
       ? { x: center.x, y: center.y }
@@ -174,6 +174,9 @@ function periodLabelFor(body: ScenarioBodyDef): string {
   if (body.isCenter || body.periodDays <= 0) {
     return "—";
   }
+  if (body.id === "earth") {
+    return "~365 days";
+  }
   if (body.periodDays < 1) {
     const minutes = body.periodDays * 24 * 60;
     return `~${minutes.toFixed(0)} min`;
@@ -185,45 +188,219 @@ function periodLabelFor(body: ScenarioBodyDef): string {
   return `~${years.toFixed(years < 20 ? 1 : 0)} yr`;
 }
 
-/**
- * Near-Earth spans huge dynamic range; speed up LEO and slow distant bodies
- * so several objects remain visually informative at once.
- */
-function nearEarthOmega(body: ScenarioBodyDef): number {
-  if (body.isCenter || body.periodDays <= 0) {
-    return 0;
-  }
-  // Map physical period into a readable band: ISS ~8 s/orbit, Moon ~40 s, JWST/Sun slower.
-  if (body.id === "iss") {
-    return (Math.PI * 2) / 8;
-  }
-  if (body.id === "moon") {
-    return (Math.PI * 2) / 40;
-  }
-  if (body.id === "jwst") {
-    return (Math.PI * 2) / 90;
-  }
-  if (body.id === "sun") {
-    // Distant reference: very slow apparent motion.
-    return (Math.PI * 2) / (EARTH_YEAR_SIM_SECONDS * 2);
-  }
-  return omegaFromPeriodDays(body.periodDays);
+function isNearEarthHelio(viewHalfWidthKm: number): boolean {
+  return viewHalfWidthKm >= NEAR_EARTH_HELIO_KM;
 }
 
-function reprojectNearEarthBodies(
+function kmToOrbitPx(km: number, viewHalfWidthKm: number): number {
+  const maxOrbitPx = Math.min(LOGICAL_WIDTH, LOGICAL_HEIGHT) * 0.42;
+  return (km / viewHalfWidthKm) * maxOrbitPx;
+}
+
+function nearEarthOmega(bodyId: string, periodDays: number): number {
+  if (periodDays <= 0) {
+    return 0;
+  }
+  // Map physical period into a readable band: ISS ~8 s/orbit, Moon ~40 s, Earth year ~48 s.
+  if (bodyId === "iss") {
+    return (Math.PI * 2) / 8;
+  }
+  if (bodyId === "moon") {
+    return (Math.PI * 2) / 40;
+  }
+  if (bodyId === "jwst") {
+    return (Math.PI * 2) / 90;
+  }
+  if (bodyId === "earth") {
+    return (Math.PI * 2) / (EARTH_YEAR_SIM_SECONDS * 2);
+  }
+  return omegaFromPeriodDays(periodDays);
+}
+
+function buildNearEarthBodies(center: Vec2, viewHalfWidthKm: number): NamedBody[] {
+  const def = SCENARIOS["near-earth"];
+  const helio = isNearEarthHelio(viewHalfWidthKm);
+  const bodies: NamedBody[] = [];
+  const earthAngle = randomInRange(0, Math.PI * 2);
+  const moonAngle = randomInRange(0, Math.PI * 2);
+  const issAngle = randomInRange(0, Math.PI * 2);
+  // JWST near anti-Sun / L2 direction relative to Earth–Sun line.
+  const jwstAngle = earthAngle + Math.PI;
+
+  for (const body of def.bodies) {
+    let isCenter = false;
+    let orbitRadiusPx = 0;
+    let angle = 0;
+    let omega = 0;
+    let distanceValue = body.distance;
+
+    if (helio) {
+      if (body.id === "sun") {
+        isCenter = true;
+        orbitRadiusPx = 0;
+        omega = 0;
+        distanceValue = 0;
+      } else if (body.id === "earth") {
+        orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
+        angle = earthAngle;
+        omega = nearEarthOmega("earth", 365.25);
+        distanceValue = AU_KM;
+      } else if (body.id === "moon" || body.id === "iss" || body.id === "jwst") {
+        orbitRadiusPx = kmToOrbitPx(body.distance, viewHalfWidthKm);
+        angle = body.id === "moon" ? moonAngle : body.id === "iss" ? issAngle : jwstAngle;
+        omega = nearEarthOmega(body.id, body.periodDays);
+      }
+    } else {
+      if (body.id === "earth") {
+        isCenter = true;
+        orbitRadiusPx = 0;
+        omega = 0;
+      } else if (body.id === "sun") {
+        // Fixed distant marker — does not orbit Earth.
+        orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
+        angle = 0;
+        omega = 0;
+        distanceValue = AU_KM;
+      } else {
+        orbitRadiusPx = kmToOrbitPx(body.distance, viewHalfWidthKm);
+        angle =
+          body.id === "moon" ? moonAngle : body.id === "iss" ? issAngle : jwstAngle;
+        omega = nearEarthOmega(body.id, body.periodDays);
+      }
+    }
+
+    bodies.push({
+      id: body.id,
+      name: body.name,
+      shortLabel: body.shortLabel,
+      description: body.description,
+      visual: body.visual,
+      isCenter,
+      drawRadius: sizeToRadius(body.sizeRank, "near-earth"),
+      distanceValue,
+      distanceUnit: "km",
+      periodLabel:
+        body.id === "earth" && helio
+          ? "~365 days"
+          : body.id === "sun"
+            ? "—"
+            : periodLabelFor({ ...body, isCenter, distance: distanceValue }),
+      position: { x: center.x, y: center.y },
+      velocity: { x: 0, y: 0 },
+      acceleration: { x: 0, y: 0 },
+      trail: [],
+      angle,
+      omega,
+      orbitRadiusPx
+    });
+  }
+
+  placeNearEarthBodies(bodies, center, viewHalfWidthKm);
+  return bodies;
+}
+
+function bodyById(bodies: NamedBody[], id: string): NamedBody | undefined {
+  return bodies.find((b) => b.id === id);
+}
+
+function placeNearEarthBodies(
   bodies: NamedBody[],
   center: Vec2,
   viewHalfWidthKm: number
 ): void {
-  const maxOrbitPx = Math.min(LOGICAL_WIDTH, LOGICAL_HEIGHT) * 0.42;
+  const helio = isNearEarthHelio(viewHalfWidthKm);
+  const sun = bodyById(bodies, "sun");
+  const earth = bodyById(bodies, "earth");
+  if (!sun || !earth) {
+    return;
+  }
+
+  if (helio) {
+    sun.isCenter = true;
+    sun.orbitRadiusPx = 0;
+    sun.omega = 0;
+    sun.position = { x: center.x, y: center.y };
+    sun.velocity = { x: 0, y: 0 };
+    sun.acceleration = { x: 0, y: 0 };
+
+    earth.isCenter = false;
+    earth.orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
+    earth.distanceValue = AU_KM;
+    earth.omega = nearEarthOmega("earth", 365.25);
+    earth.position = {
+      x: center.x + Math.cos(earth.angle) * earth.orbitRadiusPx,
+      y: center.y + Math.sin(earth.angle) * earth.orbitRadiusPx
+    };
+    const earthSpeed = Math.abs(earth.omega * earth.orbitRadiusPx);
+    earth.velocity = {
+      x: -Math.sin(earth.angle) * earthSpeed,
+      y: Math.cos(earth.angle) * earthSpeed
+    };
+    earth.acceleration = {
+      x: (center.x - earth.position.x) * earth.omega * earth.omega,
+      y: (center.y - earth.position.y) * earth.omega * earth.omega
+    };
+
+    for (const body of bodies) {
+      if (body.id === "sun" || body.id === "earth") {
+        continue;
+      }
+      body.isCenter = false;
+      const catalogKm = NEAR_EARTH_BODIES_DIST[body.id] ?? body.distanceValue;
+      body.distanceValue = catalogKm;
+      body.orbitRadiusPx = kmToOrbitPx(catalogKm, viewHalfWidthKm);
+      if (body.id === "jwst") {
+        // Stay near anti-Sun (Sun–Earth L2 direction).
+        body.angle = earth.angle + Math.PI;
+        body.omega = 0;
+      }
+      const useAngle = body.angle;
+      const relR = body.orbitRadiusPx;
+      body.position = {
+        x: earth.position.x + Math.cos(useAngle) * relR,
+        y: earth.position.y + Math.sin(useAngle) * relR
+      };
+      const relSpeed = Math.abs(body.omega * relR);
+      const relVx = -Math.sin(useAngle) * relSpeed;
+      const relVy = Math.cos(useAngle) * relSpeed;
+      body.velocity = {
+        x: earth.velocity.x + relVx,
+        y: earth.velocity.y + relVy
+      };
+      body.acceleration = {
+        x: (earth.position.x - body.position.x) * (body.omega * body.omega || earth.omega * earth.omega),
+        y: (earth.position.y - body.position.y) * (body.omega * body.omega || earth.omega * earth.omega)
+      };
+    }
+    return;
+  }
+
+  // Geocentric: Earth fixed; Sun is a stationary distant marker.
+  earth.isCenter = true;
+  earth.orbitRadiusPx = 0;
+  earth.omega = 0;
+  earth.distanceValue = 0;
+  earth.position = { x: center.x, y: center.y };
+  earth.velocity = { x: 0, y: 0 };
+  earth.acceleration = { x: 0, y: 0 };
+
+  sun.isCenter = false;
+  sun.orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
+  sun.distanceValue = AU_KM;
+  sun.omega = 0;
+  sun.position = {
+    x: center.x + Math.cos(sun.angle) * sun.orbitRadiusPx,
+    y: center.y + Math.sin(sun.angle) * sun.orbitRadiusPx
+  };
+  sun.velocity = { x: 0, y: 0 };
+  sun.acceleration = { x: 0, y: 0 };
+
   for (const body of bodies) {
-    if (body.isCenter) {
-      body.position = { x: center.x, y: center.y };
-      body.orbitRadiusPx = 0;
+    if (body.id === "earth" || body.id === "sun") {
       continue;
     }
-    body.orbitRadiusPx = (body.distanceValue / viewHalfWidthKm) * maxOrbitPx;
-    // Keep angle; update position from current angle.
+    body.isCenter = false;
+    body.orbitRadiusPx = kmToOrbitPx(body.distanceValue, viewHalfWidthKm);
     body.position = {
       x: center.x + Math.cos(body.angle) * body.orbitRadiusPx,
       y: center.y + Math.sin(body.angle) * body.orbitRadiusPx
@@ -233,7 +410,44 @@ function reprojectNearEarthBodies(
       x: -Math.sin(body.angle) * speed,
       y: Math.cos(body.angle) * speed
     };
+    body.acceleration = {
+      x: (center.x - body.position.x) * body.omega * body.omega,
+      y: (center.y - body.position.y) * body.omega * body.omega
+    };
   }
+}
+
+const NEAR_EARTH_BODIES_DIST: Record<string, number> = {
+  iss: 6771,
+  moon: 384400,
+  jwst: 1.5e6,
+  sun: AU_KM,
+  earth: AU_KM
+};
+
+function reprojectNearEarthBodies(
+  bodies: NamedBody[],
+  center: Vec2,
+  viewHalfWidthKm: number
+): void {
+  const wasHelio = bodies.some((b) => b.id === "sun" && b.isCenter);
+  const helio = isNearEarthHelio(viewHalfWidthKm);
+  if (wasHelio !== helio) {
+    for (const body of bodies) {
+      body.trail = [];
+    }
+    // Restore catalog distances when flipping layout.
+    for (const body of bodies) {
+      if (body.id === "earth") {
+        body.distanceValue = helio ? AU_KM : 0;
+      } else if (body.id === "sun") {
+        body.distanceValue = helio ? 0 : AU_KM;
+      } else {
+        body.distanceValue = NEAR_EARTH_BODIES_DIST[body.id] ?? body.distanceValue;
+      }
+    }
+  }
+  placeNearEarthBodies(bodies, center, viewHalfWidthKm);
 }
 
 export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim {
@@ -352,29 +566,15 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
   }
 
   function stepScenario(clampedDt: number): void {
+    if (scenario === "near-earth") {
+      stepNearEarth(clampedDt);
+      return;
+    }
     for (const body of bodies) {
       if (body.isCenter) {
         body.position = { x: center.x, y: center.y };
         body.velocity = { x: 0, y: 0 };
         body.acceleration = { x: 0, y: 0 };
-        continue;
-      }
-      // Keep positions updated even when off-screen so follow/zoom-to still works.
-      if (scenario === "near-earth" && body.orbitRadiusPx > maxVisibleOrbitPx() * 1.35) {
-        body.angle += body.omega * clampedDt * timeScale;
-        body.position = {
-          x: center.x + Math.cos(body.angle) * body.orbitRadiusPx,
-          y: center.y + Math.sin(body.angle) * body.orbitRadiusPx
-        };
-        const speed = Math.abs(body.omega * body.orbitRadiusPx * timeScale);
-        body.velocity = {
-          x: -Math.sin(body.angle) * speed,
-          y: Math.cos(body.angle) * speed
-        };
-        const dx = center.x - body.position.x;
-        const dy = center.y - body.position.y;
-        const w2 = body.omega * body.omega;
-        body.acceleration = { x: dx * w2, y: dy * w2 };
         continue;
       }
       body.angle += body.omega * clampedDt * timeScale;
@@ -387,7 +587,6 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
         x: -Math.sin(body.angle) * speed,
         y: Math.cos(body.angle) * speed
       };
-      // Circular-orbit centripetal acceleration (pull toward center).
       const dx = center.x - body.position.x;
       const dy = center.y - body.position.y;
       const w2 = body.omega * body.omega;
@@ -396,8 +595,47 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
     }
   }
 
-  function maxVisibleOrbitPx(): number {
-    return Math.min(LOGICAL_WIDTH, LOGICAL_HEIGHT) * 0.48;
+  function stepNearEarth(clampedDt: number): void {
+    const helio = isNearEarthHelio(viewHalfWidthKm);
+    const dt = clampedDt * timeScale;
+    const earth = bodyById(bodies, "earth");
+    const sun = bodyById(bodies, "sun");
+    if (!earth || !sun) {
+      return;
+    }
+
+    if (helio) {
+      earth.angle += earth.omega * dt;
+      for (const body of bodies) {
+        if (body.id === "moon" || body.id === "iss") {
+          body.angle += body.omega * dt;
+        }
+      }
+      placeNearEarthBodies(bodies, center, viewHalfWidthKm);
+      // Trails: Earth around the Sun; satellites around Earth (not the Sun).
+      addTrailPoint(earth.trail, earth.position, TRAIL_LENGTH);
+      for (const body of bodies) {
+        if (body.id === "moon" || body.id === "iss" || body.id === "jwst") {
+          addTrailPoint(body.trail, body.position, TRAIL_LENGTH);
+        }
+      }
+      return;
+    }
+
+    // Geocentric: Earth fixed; Sun fixed; satellites orbit Earth.
+    for (const body of bodies) {
+      if (body.id === "earth" || body.id === "sun") {
+        continue;
+      }
+      body.angle += body.omega * dt;
+    }
+    placeNearEarthBodies(bodies, center, viewHalfWidthKm);
+    for (const body of bodies) {
+      if (body.id === "earth" || body.id === "sun") {
+        continue;
+      }
+      addTrailPoint(body.trail, body.position, TRAIL_LENGTH);
+    }
   }
 
   return {

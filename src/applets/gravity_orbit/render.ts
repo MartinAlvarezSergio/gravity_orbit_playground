@@ -24,20 +24,20 @@ function drawArrow(
   color: string
 ): void {
   const len = Math.hypot(dx, dy);
-  if (len < 1.5) {
+  if (len < 0.5) {
     return;
   }
   ctx.save();
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(x, y);
   ctx.lineTo(x + dx, y + dy);
   ctx.stroke();
 
   const angle = Math.atan2(dy, dx);
-  const head = Math.min(8, len * 0.35);
+  const head = Math.min(10, Math.max(6, len * 0.32));
   ctx.beginPath();
   ctx.moveTo(x + dx, y + dy);
   ctx.lineTo(
@@ -51,6 +51,23 @@ function drawArrow(
   ctx.closePath();
   ctx.fill();
   ctx.restore();
+}
+
+/** Keep velocity/force arrows readable even when orbital radii are tiny on screen. */
+function readableArrowDelta(
+  dx: number,
+  dy: number,
+  preferredScale: number,
+  minLen = 22,
+  maxLen = 64
+): { dx: number; dy: number } | null {
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-12) {
+    return null;
+  }
+  const target = Math.min(maxLen, Math.max(minLen, len * preferredScale));
+  const s = target / len;
+  return { dx: dx * s, dy: dy * s };
 }
 
 function drawOrbitGuides(
@@ -68,6 +85,41 @@ function drawOrbitGuides(
       ctx.beginPath();
       ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
       ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+
+  if (scenario === "near-earth") {
+    const sun = visibleBodies.find((b) => b.id === "sun") ?? snapshot.bodies.find((b) => b.id === "sun");
+    const earth =
+      visibleBodies.find((b) => b.id === "earth") ?? snapshot.bodies.find((b) => b.id === "earth");
+    if (sun && earth) {
+      // Always paint Earth's heliocentric orbit (circle centered on the Sun through Earth).
+      const earthOrbitR = Math.hypot(earth.position.x - sun.position.x, earth.position.y - sun.position.y);
+      if (earthOrbitR > 8) {
+        ctx.strokeStyle = "rgba(120, 200, 255, 0.35)";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(sun.position.x, sun.position.y, earthOrbitR, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    // Satellite rings around Earth (not the Sun).
+    if (earth) {
+      ctx.strokeStyle = "rgba(136, 180, 255, 0.2)";
+      ctx.lineWidth = 1;
+      for (const body of visibleBodies) {
+        if (body.id === "iss" || body.id === "moon" || body.id === "jwst") {
+          const r = Math.hypot(body.position.x - earth.position.x, body.position.y - earth.position.y);
+          if (r < 8) {
+            continue;
+          }
+          ctx.beginPath();
+          ctx.arc(earth.position.x, earth.position.y, r, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
     }
     ctx.restore();
     return;
@@ -113,9 +165,15 @@ function drawTrails(
       if (body.trail.length < 2) {
         continue;
       }
+      // Near-Earth: emphasize Earth's heliocentric trail; skip the fixed Sun.
+      if (snapshot.scenario === "near-earth" && body.id === "sun") {
+        continue;
+      }
+      const isEarthTrail = snapshot.scenario === "near-earth" && body.id === "earth";
+      ctx.lineWidth = isEarthTrail ? 2.2 : 1.2;
       ctx.strokeStyle =
-        snapshot.selectedBodyId === body.id
-          ? "rgba(255, 220, 140, 0.55)"
+        snapshot.selectedBodyId === body.id || isEarthTrail
+          ? "rgba(255, 220, 140, 0.7)"
           : "rgba(160, 200, 255, 0.28)";
       ctx.beginPath();
       ctx.moveTo(body.trail[0].x, body.trail[0].y);
@@ -135,24 +193,16 @@ function drawPlaygroundBodies(
 ): void {
   for (const particle of snapshot.particles) {
     if (options.showForceVectors) {
-      drawArrow(
-        ctx,
-        particle.position.x,
-        particle.position.y,
-        particle.acceleration.x * 0.012,
-        particle.acceleration.y * 0.012,
-        "rgba(255, 140, 110, 0.9)"
-      );
+      const d = readableArrowDelta(particle.acceleration.x, particle.acceleration.y, 0.02, 16, 48);
+      if (d) {
+        drawArrow(ctx, particle.position.x, particle.position.y, d.dx, d.dy, "rgba(255, 140, 110, 0.9)");
+      }
     }
     if (options.showVelocityVectors) {
-      drawArrow(
-        ctx,
-        particle.position.x,
-        particle.position.y,
-        particle.velocity.x * 0.045,
-        particle.velocity.y * 0.045,
-        "rgba(110, 220, 170, 0.85)"
-      );
+      const d = readableArrowDelta(particle.velocity.x, particle.velocity.y, 0.06, 16, 48);
+      if (d) {
+        drawArrow(ctx, particle.position.x, particle.position.y, d.dx, d.dy, "rgba(110, 220, 170, 0.85)");
+      }
     }
 
     ctx.beginPath();
@@ -192,25 +242,32 @@ function drawScenarioBodies(
   visible: NamedBody[]
 ): void {
   for (const body of visible) {
-    if (!body.isCenter && options.showForceVectors) {
-      drawArrow(
-        ctx,
-        body.position.x,
-        body.position.y,
-        body.acceleration.x * 0.035,
-        body.acceleration.y * 0.035,
-        "rgba(255, 140, 110, 0.92)"
-      );
+    const showVectors = !body.isCenter || (snapshot.scenario === "near-earth" && body.id === "earth");
+    if (showVectors && options.showForceVectors) {
+      const d = readableArrowDelta(body.acceleration.x, body.acceleration.y, 0.05);
+      if (d) {
+        drawArrow(
+          ctx,
+          body.position.x,
+          body.position.y,
+          d.dx,
+          d.dy,
+          "rgba(255, 140, 110, 0.95)"
+        );
+      }
     }
-    if (!body.isCenter && options.showVelocityVectors) {
-      drawArrow(
-        ctx,
-        body.position.x,
-        body.position.y,
-        body.velocity.x * 0.08,
-        body.velocity.y * 0.08,
-        "rgba(110, 220, 170, 0.85)"
-      );
+    if (showVectors && options.showVelocityVectors) {
+      const d = readableArrowDelta(body.velocity.x, body.velocity.y, 0.12);
+      if (d) {
+        drawArrow(
+          ctx,
+          body.position.x,
+          body.position.y,
+          d.dx,
+          d.dy,
+          "rgba(110, 220, 170, 0.92)"
+        );
+      }
     }
 
     drawNamedBody(ctx, body.visual, body.position.x, body.position.y, body.drawRadius, {

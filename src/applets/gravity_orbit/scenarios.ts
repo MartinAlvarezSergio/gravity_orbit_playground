@@ -129,14 +129,16 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
 
 /**
  * Earth-centered near-space bodies.
- * Distances are approximate mean/typical values from Earth's center.
+ * Distances are approximate mean/typical values from Earth's center (except the Sun at 1 AU).
+ * Wide views switch to a heliocentric layout so Earth orbits the Sun (not the other way around).
  */
 export const NEAR_EARTH_BODIES: ScenarioBodyDef[] = [
   {
     id: "earth",
     name: "Earth",
     shortLabel: "Earth",
-    description: "Central body for this scenario. Satellites and the Moon orbit (schematically) around Earth.",
+    description:
+      "Home world. Close-in views keep Earth fixed with satellites around it; wide views put Earth on its orbit around the Sun.",
     visual: "earth",
     isCenter: true,
     distance: 0,
@@ -182,7 +184,7 @@ export const NEAR_EARTH_BODIES: ScenarioBodyDef[] = [
     name: "Sun",
     shortLabel: "Sun",
     description:
-      "Shown at 1 AU for scale. In reality Earth orbits the Sun; here the Sun is placed as a distant reference while the view stays Earth-centered.",
+      "At 1 AU. Close-in views keep the Sun fixed as a distant scale marker; wide views place the Sun at the center with Earth orbiting it.",
     visual: "sun",
     isCenter: false,
     distance: 1.496e8,
@@ -214,7 +216,7 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
     title: "Earth–Moon–satellites",
     summary: "Earth, ISS, Moon, JWST, and the Sun as a distant scale reference. Use the distance slider to zoom.",
     note:
-      "Earth-centered schematic. Distances are approximate. ISS/Moon/JWST/Sun sizes are not to scale. The distance slider sets the view half-width (log km).",
+      "Schematic distances. Close-in: Earth-centered (Sun fixed — it does not orbit Earth). Wide view: heliocentric so Earth orbits the Sun with trail. Sizes exaggerated.",
     distanceUnit: "km",
     bodies: NEAR_EARTH_BODIES
   },
@@ -276,3 +278,6 @@ export function formatDistance(value: number, unit: "AU" | "km"): string {
 export const NEAR_EARTH_VIEW_MIN_KM = 2e3;
 export const NEAR_EARTH_VIEW_MAX_KM = 2e8;
 export const NEAR_EARTH_VIEW_DEFAULT_KM = 5e5;
+/** Above this view half-width, layout is heliocentric (Earth orbits Sun). */
+export const NEAR_EARTH_HELIO_KM = 8e6;
+export const AU_KM = 1.496e8;

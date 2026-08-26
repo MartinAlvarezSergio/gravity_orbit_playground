@@ -658,7 +658,9 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                     onChange={(event) => setViewHalfWidthKm(sliderToKm(Number(event.target.value)))}
                   />
                   <span className="gravity-distance-hints">
-                    Physical scale from LEO (~ISS) out past the Moon and JWST toward 1 AU.
+                    Physical scale from LEO (~ISS) out past the Moon and JWST toward 1 AU. Wide
+                    views switch to heliocentric: Earth orbits the Sun (with trail); the Sun does
+                    not orbit Earth.
                   </span>
                 </label>
               ) : null}
