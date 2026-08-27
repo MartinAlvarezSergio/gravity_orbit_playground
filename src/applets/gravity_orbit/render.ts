@@ -1,6 +1,8 @@
 import { applyCameraTransform, worldToScreen, type CameraView } from "./camera";
 import { drawNamedBody } from "./bodyVisuals";
 import { renderEarthPitchWorld } from "./earthPitchRender";
+import type { HistoricGuide } from "./historicModels";
+import { historicModelMeta } from "./historicModels";
 import { formatDistance } from "./scenarios";
 import { GravitySnapshot, NamedBody } from "./types";
 
@@ -70,6 +72,83 @@ function readableArrowDelta(
   return { dx: dx * s, dy: dy * s };
 }
 
+function guideStroke(
+  style: HistoricGuide["style"],
+  emphasize: boolean | undefined
+): { color: string; width: number; dash?: number[] } {
+  const hot = Boolean(emphasize);
+  switch (style) {
+    case "deferent":
+      return {
+        color: hot ? "rgba(255, 196, 120, 0.7)" : "rgba(255, 176, 96, 0.28)",
+        width: hot ? 1.8 : 1.1
+      };
+    case "epicycle":
+      return {
+        color: hot ? "rgba(255, 120, 160, 0.85)" : "rgba(255, 110, 150, 0.32)",
+        width: hot ? 1.7 : 1.05,
+        dash: hot ? undefined : [4, 4]
+      };
+    case "sun-path":
+      return {
+        color: hot ? "rgba(255, 220, 120, 0.75)" : "rgba(255, 210, 100, 0.35)",
+        width: hot ? 1.8 : 1.2
+      };
+    case "spoke":
+      return {
+        color: hot ? "rgba(200, 220, 255, 0.55)" : "rgba(160, 180, 220, 0.22)",
+        width: hot ? 1.3 : 1
+      };
+    case "epicycle-arm":
+      return {
+        color: hot ? "rgba(255, 150, 180, 0.8)" : "rgba(255, 130, 160, 0.28)",
+        width: hot ? 1.4 : 1
+      };
+    case "orbit":
+    default:
+      return {
+        color: hot ? "rgba(140, 200, 255, 0.65)" : "rgba(136, 180, 255, 0.2)",
+        width: hot ? 1.6 : 1.05
+      };
+  }
+}
+
+function drawHistoricGuides(ctx: CanvasRenderingContext2D, guides: HistoricGuide[]): void {
+  // Dim guides first, emphasized on top.
+  const ordered = [...guides].sort((a, b) => Number(Boolean(a.emphasize)) - Number(Boolean(b.emphasize)));
+  for (const guide of ordered) {
+    const stroke = guideStroke(guide.style, guide.emphasize);
+    ctx.save();
+    ctx.strokeStyle = stroke.color;
+    ctx.lineWidth = stroke.width;
+    if (stroke.dash) {
+      ctx.setLineDash(stroke.dash);
+    }
+    if (guide.kind === "circle") {
+      if (guide.radiusPx < 4) {
+        ctx.restore();
+        continue;
+      }
+      ctx.beginPath();
+      ctx.arc(guide.cx, guide.cy, guide.radiusPx, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (guide.kind === "ellipse") {
+      ctx.beginPath();
+      ctx.translate(guide.cx, guide.cy);
+      ctx.rotate(guide.rotation);
+      ctx.scale(1, guide.bPx / Math.max(guide.aPx, 1e-6));
+      ctx.arc(0, 0, guide.aPx, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(guide.x0, guide.y0);
+      ctx.lineTo(guide.x1, guide.y1);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
 function drawOrbitGuides(
   ctx: CanvasRenderingContext2D,
   snapshot: GravitySnapshot,
@@ -86,6 +165,12 @@ function drawOrbitGuides(
       ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
       ctx.stroke();
     }
+    ctx.restore();
+    return;
+  }
+
+  if (scenario === "historic-models") {
+    drawHistoricGuides(ctx, snapshot.historicGuides);
     ctx.restore();
     return;
   }
@@ -169,12 +254,20 @@ function drawTrails(
       if (snapshot.scenario === "near-earth" && body.id === "sun") {
         continue;
       }
+      if (snapshot.scenario === "historic-models" && body.isCenter) {
+        continue;
+      }
       const isEarthTrail = snapshot.scenario === "near-earth" && body.id === "earth";
-      ctx.lineWidth = isEarthTrail ? 2.2 : 1.2;
-      ctx.strokeStyle =
-        snapshot.selectedBodyId === body.id || isEarthTrail
+      const isHistoricSelected =
+        snapshot.scenario === "historic-models" && snapshot.selectedBodyId === body.id;
+      ctx.lineWidth = isEarthTrail || isHistoricSelected ? 2.4 : 1.2;
+      ctx.strokeStyle = isHistoricSelected
+        ? "rgba(255, 170, 140, 0.82)"
+        : snapshot.selectedBodyId === body.id || isEarthTrail
           ? "rgba(255, 220, 140, 0.7)"
-          : "rgba(160, 200, 255, 0.28)";
+          : snapshot.scenario === "historic-models"
+            ? "rgba(160, 200, 255, 0.22)"
+            : "rgba(160, 200, 255, 0.28)";
       ctx.beginPath();
       ctx.moveTo(body.trail[0].x, body.trail[0].y);
       for (let i = 1; i < body.trail.length; i += 1) {
@@ -223,16 +316,19 @@ function drawPlaygroundBodies(
   });
 }
 
-function visibleScenarioBodies(snapshot: GravitySnapshot, camera: CameraView): NamedBody[] {
+function visibleScenarioBodies(snapshot: GravitySnapshot, _camera: CameraView): NamedBody[] {
+  void _camera;
   if (snapshot.scenario !== "near-earth") {
     return snapshot.bodies;
   }
-  // When zoomed/following, keep all bodies available so follow targets stay visible.
-  if (camera.zoom > 1.05) {
-    return snapshot.bodies;
-  }
-  const maxR = Math.min(snapshot.width, snapshot.height) * 0.48;
-  return snapshot.bodies.filter((b) => b.isCenter || b.orbitRadiusPx <= maxR * 1.25);
+  // At AU-wide scales, Moon/ISS/JWST sit on top of Earth in pixels — hide them so
+  // the heliocentric Earth orbit stays readable. Sun + Earth always remain.
+  return snapshot.bodies.filter((body) => {
+    if (body.id === "sun" || body.id === "earth") {
+      return true;
+    }
+    return body.orbitRadiusPx >= 3.5;
+  });
 }
 
 function isBodyOnScreen(
@@ -316,8 +412,10 @@ function drawScenarioBodies(
   }
 
   for (const body of visible) {
-    const showVectors = !body.isCenter || (snapshot.scenario === "near-earth" && body.id === "earth");
-    if (showVectors && options.showForceVectors) {
+    const showMotion =
+      !body.isCenter || (snapshot.scenario === "near-earth" && body.id === "earth");
+    // Historic models are kinematic cartoons — no Newtonian pull arrows.
+    if (showMotion && options.showForceVectors && snapshot.scenario !== "historic-models") {
       const d = readableArrowDelta(body.acceleration.x, body.acceleration.y, 0.05);
       if (d) {
         drawArrow(
@@ -330,7 +428,7 @@ function drawScenarioBodies(
         );
       }
     }
-    if (showVectors && options.showVelocityVectors) {
+    if (showMotion && options.showVelocityVectors) {
       const d = readableArrowDelta(body.velocity.x, body.velocity.y, 0.12);
       if (d) {
         drawArrow(
@@ -354,7 +452,7 @@ function drawScenarioBodies(
 
     drawNamedBody(ctx, body.visual, body.position.x, body.position.y, body.drawRadius, {
       selected: snapshot.selectedBodyId === body.id,
-      label: body.shortLabel,
+      label: body.drawRadius >= 3.2 ? body.shortLabel : undefined,
       lightToSun
     });
   }
@@ -375,6 +473,10 @@ function drawHud(
   const bits: string[] = [];
   if (snapshot.scenario === "near-earth" && snapshot.viewHalfWidthKm != null) {
     bits.push(`View half-width ≈ ${formatDistance(snapshot.viewHalfWidthKm, "km")}`);
+  }
+  if (snapshot.scenario === "historic-models" && snapshot.historicModel) {
+    const meta = historicModelMeta(snapshot.historicModel);
+    bits.push(`${meta.label} · ${meta.yearHint}`);
   }
   if (snapshot.earthPitch) {
     const pitch = snapshot.earthPitch;

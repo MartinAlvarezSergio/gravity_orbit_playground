@@ -48,33 +48,33 @@ export type PitchPreset = {
 export const PITCH_PRESETS: PitchPreset[] = [
   {
     id: "fast",
-    label: "Fast pitch (≪ v_circ)",
+    label: "Hard throw (still slow)",
     blurb:
-      "Everyday hard throw — tiny compared with orbital speed. Start zoomed in: the ground looks flat and the ball just falls.",
+      "Like a strong baseball pitch — way below orbital speed. Stay zoomed in: the ground looks flat and the ball just falls.",
     speedFraction: 0.05
   },
   {
     id: "horizon",
-    label: "Long pitch over the horizon",
-    blurb: "Fast throw that curves with Earth but still falls short of orbit.",
+    label: "Long arc over the horizon",
+    blurb: "Fast enough that Earth curves under the path, but still not enough to stay in orbit.",
     speedFraction: 0.82
   },
   {
     id: "circular",
     label: "Circular orbit",
-    blurb: "Launch at circular speed — the ball forever falls around Earth.",
+    blurb: "Hit circular speed and the ball keeps falling around Earth without hitting the ground.",
     speedFraction: 1.0
   },
   {
     id: "elliptical",
     label: "Elliptical orbit",
-    blurb: "Faster than circular, slower than escape — a closed oval path.",
+    blurb: "Faster than circular, slower than escape — a closed oval that comes back around.",
     speedFraction: 1.22
   },
   {
     id: "hyperbolic",
-    label: "Hyperbolic escape",
-    blurb: "Faster than escape speed — the ball leaves and never returns.",
+    label: "Escape trajectory",
+    blurb: "Faster than escape speed — the path opens up and the ball doesn’t come back.",
     speedFraction: 1.55
   }
 ];
@@ -147,15 +147,15 @@ function classifyRegime(speedFraction: number): PitchRegime {
 function regimeNote(regime: PitchRegime, speedFraction: number): string {
   switch (regime) {
     case "everyday":
-      return `Classroom start: a “fast pitch” at only ${speedFraction.toFixed(2)}× v_circ (≪ orbital speed). Zoomed in, Earth looks flat and the ball simply falls — then zoom out and raise the speed to reveal orbits.`;
+      return `You’re at ${speedFraction.toFixed(2)}× circular speed — still a normal throw compared with orbit. Zoomed in, Earth looks flat and the ball falls. Zoom out, then raise the speed to see orbits appear.`;
     case "suborbital":
-      return "Newton’s insight: the ball falls, but Earth curves away beneath it — until it hits.";
+      return "Newton’s idea in one sentence: the ball is falling the whole time, but Earth’s surface curves away — until the path hits ground again.";
     case "circular":
-      return "At circular speed the path closes on itself: continuous free-fall that never meets the ground.";
+      return "At circular speed the path closes: continuous free-fall that never meets the ground (in this airless idealization).";
     case "elliptical":
-      return "Between circular and escape speed the orbit is a closed ellipse (idealized; no atmosphere).";
+      return "Between circular and escape speed you get a closed ellipse. Still bound to Earth; no atmosphere in this demo.";
     case "hyperbolic":
-      return "Above escape speed the path is open — a hyperbolic flyby that leaves Earth behind.";
+      return "Past escape speed the trajectory is open. The ball leaves and doesn’t return on this path.";
     default:
       return "";
   }
@@ -334,7 +334,7 @@ export function formatPitchSpeed(state: EarthPitchState): string {
 export function pitchRegimeLabel(regime: PitchRegime): string {
   switch (regime) {
     case "everyday":
-      return "Everyday pitch (≪ v_circ)";
+      return "Everyday throw (≪ orbital)";
     case "suborbital":
       return "Suborbital (hits Earth)";
     case "circular":
@@ -342,7 +342,7 @@ export function pitchRegimeLabel(regime: PitchRegime): string {
     case "elliptical":
       return "Elliptical orbit";
     case "hyperbolic":
-      return "Hyperbolic escape";
+      return "Escape trajectory";
     default:
       return regime;
   }

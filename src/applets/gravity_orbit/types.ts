@@ -1,7 +1,13 @@
 import type { EarthPitchState } from "./earthPitch";
+import type { HistoricGuide, HistoricModelId } from "./historicModels";
 import { Vec2 } from "../../core/vector";
 
-export type ScenarioId = "playground" | "solar-system" | "near-earth" | "earth-pitch";
+export type ScenarioId =
+  | "playground"
+  | "solar-system"
+  | "near-earth"
+  | "earth-pitch"
+  | "historic-models";
 
 export type BodyVisualKind =
   | "sun"
@@ -86,6 +92,10 @@ export type GravitySnapshot = {
   viewHalfWidthKm: number | null;
   /** Newton baseball / cannonball demo state. */
   earthPitch: EarthPitchState | null;
+  /** Active historic model, when scenario is historic-models. */
+  historicModel: HistoricModelId | null;
+  /** Deferent / epicycle / ellipse guides for historic models. */
+  historicGuides: HistoricGuide[];
   totalKineticEnergy: number;
   averageSpeed: number;
   note: string;

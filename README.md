@@ -1,20 +1,11 @@
-# Gravity Orbit Playground
+# Gravity Orbits & The Solar System
 
-Standalone physics applet published at:
+Standalone GitHub Pages build of the gravity-orbit applet from [physics_demos](https://github.com/MartinAlvarezSergio/physics_demos).
 
-https://martinalvarezsergio.github.io/gravity_orbit_playground/
-
-## Local
+Live: https://martinalvarezsergio.github.io/gravity_orbit_playground/
 
 ```bash
 npm install
 npm run dev
+npm run deploy   # build + publish gh-pages
 ```
-
-## Deploy (GitHub Pages)
-
-```bash
-npm run deploy
-```
-
-Then set Pages source to branch `gh-pages` / `(root)`.

@@ -30,7 +30,8 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
     id: "sun",
     name: "Sun",
     shortLabel: "Sun",
-    description: "Central star. In this demo it is fixed; planets follow circular Keplerian orbits.",
+    description:
+      "The central star. Here it’s fixed in place so you can focus on the planets’ orbits.",
     visual: "sun",
     isCenter: true,
     distance: 0,
@@ -41,7 +42,7 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
     id: "mercury",
     name: "Mercury",
     shortLabel: "Mer",
-    description: "Innermost planet. Short year (~88 days) and fast orbital speed.",
+    description: "Closest in. A year is only ~88 days, so it zips around quickly.",
     visual: "mercury",
     isCenter: false,
     distance: 0.387,
@@ -52,7 +53,7 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
     id: "venus",
     name: "Venus",
     shortLabel: "Ven",
-    description: "Similar size to Earth, but a much denser atmosphere. Year ~225 days.",
+    description: "Earth’s neighbor in size, but with a thick atmosphere. Year ~225 days.",
     visual: "venus",
     isCenter: false,
     distance: 0.723,
@@ -63,7 +64,7 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
     id: "earth",
     name: "Earth",
     shortLabel: "Ear",
-    description: "Our home world. One AU from the Sun; period fixed as 1 year in this model.",
+    description: "Home. One astronomical unit from the Sun; we take its year as 1 in this model.",
     visual: "earth",
     isCenter: false,
     distance: 1.0,
@@ -74,7 +75,7 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
     id: "mars",
     name: "Mars",
     shortLabel: "Mar",
-    description: "The red planet. Year ~687 days; farther and slower than Earth.",
+    description: "Farther out and slower. A Martian year is ~687 Earth days.",
     visual: "mars",
     isCenter: false,
     distance: 1.524,
@@ -85,7 +86,7 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
     id: "jupiter",
     name: "Jupiter",
     shortLabel: "Jup",
-    description: "Gas giant. Dominates the outer system mass; year ~12 Earth years.",
+    description: "The heavyweight of the outer planets. One trip around the Sun takes ~12 Earth years.",
     visual: "jupiter",
     isCenter: false,
     distance: 5.203,
@@ -96,7 +97,7 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
     id: "saturn",
     name: "Saturn",
     shortLabel: "Sat",
-    description: "Ringed gas giant. Year ~29 Earth years. Rings are drawn schematically.",
+    description: "Famous for its rings (drawn simply here). Year ~29 Earth years.",
     visual: "saturn",
     isCenter: false,
     distance: 9.537,
@@ -107,7 +108,7 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
     id: "uranus",
     name: "Uranus",
     shortLabel: "Ura",
-    description: "Ice giant. Year ~84 Earth years. Distance compressed in this view.",
+    description: "An ice giant with a long year (~84 Earth years). Distance is squeezed so it still fits on screen.",
     visual: "uranus",
     isCenter: false,
     distance: 19.19,
@@ -118,7 +119,7 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
     id: "neptune",
     name: "Neptune",
     shortLabel: "Nep",
-    description: "Outermost planet here. Year ~165 Earth years. Distance strongly compressed.",
+    description: "The outermost planet in this map. Year ~165 Earth years; its distance is compressed a lot.",
     visual: "neptune",
     isCenter: false,
     distance: 30.07,
@@ -128,28 +129,42 @@ export const SOLAR_SYSTEM_BODIES: ScenarioBodyDef[] = [
 ];
 
 /**
- * Earth-centered near-space bodies.
- * Distances are approximate mean/typical values from Earth's center (except the Sun at 1 AU).
- * Wide views switch to a heliocentric layout so Earth orbits the Sun (not the other way around).
+ * Near-Earth neighborhood on a heliocentric stage: the Sun is always the center,
+ * Earth always orbits it, and ISS / Moon / JWST ride with Earth.
+ * Distances for satellites are approximate means from Earth's center; Earth–Sun is 1 AU.
+ * The view slider only changes how much space fits on screen — it does not flip the frame.
  */
 export const NEAR_EARTH_BODIES: ScenarioBodyDef[] = [
+  {
+    id: "sun",
+    name: "Sun",
+    shortLabel: "Sun",
+    description:
+      "Always the center of this map. Earth goes around it once per year. Zoomed in near Earth, the Sun may sit off-screen — an arrow still points toward it.",
+    visual: "sun",
+    isCenter: true,
+    distance: 0,
+    periodDays: 0,
+    sizeRank: 14
+  },
   {
     id: "earth",
     name: "Earth",
     shortLabel: "Earth",
     description:
-      "Home world. Close-in views keep Earth fixed with satellites around it; wide views put Earth on its orbit around the Sun.",
+      "Always orbiting the Sun at about 1 AU. Follow Earth and tighten the view to watch the ISS, Moon, and JWST move around it.",
     visual: "earth",
-    isCenter: true,
-    distance: 0,
-    periodDays: 0,
+    isCenter: false,
+    distance: 1.496e8,
+    periodDays: 365.25,
     sizeRank: 22
   },
   {
     id: "iss",
     name: "International Space Station",
     shortLabel: "ISS",
-    description: "Crewed laboratory in low Earth orbit (~420 km altitude). Completes an orbit in ~93 minutes.",
+    description:
+      "Low Earth orbit, only a few hundred km up. It completes a lap in about 93 minutes — much faster than the Moon.",
     visual: "iss",
     isCenter: false,
     distance: 6771,
@@ -160,7 +175,7 @@ export const NEAR_EARTH_BODIES: ScenarioBodyDef[] = [
     id: "moon",
     name: "Moon",
     shortLabel: "Moon",
-    description: "Earth's natural satellite at ~384,400 km. Period ~27.3 days (sidereal).",
+    description: "About 384,000 km from Earth. One orbit takes roughly 27 days (sidereal).",
     visual: "moon",
     isCenter: false,
     distance: 384400,
@@ -172,24 +187,12 @@ export const NEAR_EARTH_BODIES: ScenarioBodyDef[] = [
     name: "James Webb Space Telescope",
     shortLabel: "JWST",
     description:
-      "Observatory near Sun–Earth L2 (~1.5 million km from Earth). Shown here as a distant Earth-facing satellite for scale study.",
+      "Near the Sun–Earth L2 point, about 1.5 million km from Earth (anti-Sun side). Farther than the Moon, but still tiny next to 1 AU.",
     visual: "jwst",
     isCenter: false,
     distance: 1.5e6,
     periodDays: 365.25,
     sizeRank: 6
-  },
-  {
-    id: "sun",
-    name: "Sun",
-    shortLabel: "Sun",
-    description:
-      "At 1 AU. Close-in views keep the Sun fixed as a distant scale marker; wide views place the Sun at the center with Earth orbiting it.",
-    visual: "sun",
-    isCenter: false,
-    distance: 1.496e8,
-    periodDays: 365.25,
-    sizeRank: 14
   }
 ];
 
@@ -197,26 +200,28 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
   playground: {
     id: "playground",
     title: "Particle playground",
-    summary: "Many anonymous particles around a draggable central mass.",
-    note: "Softened Newtonian gravity with optional particle self-gravity. Not a Solar System model.",
+    summary: "Drop anonymous particles around a mass you can drag — a sandbox for Newtonian gravity.",
+    note:
+      "This is softened gravity (not the Solar System). Turn on particle–particle gravity if you want them to tug on each other. Drag the central mass to move the “star.”",
     distanceUnit: null,
     bodies: []
   },
   "solar-system": {
     id: "solar-system",
     title: "Solar System",
-    summary: "Sun plus the eight planets on circular orbits. Click a planet to inspect it.",
+    summary: "Sun and eight planets on circular orbits. Click a planet to inspect it.",
     note:
-      "Circular Keplerian orbits with approximate periods. Orbital radii use a compressed (power-law) scale so outer planets fit; body sizes are exaggerated for visibility.",
+      "Orbits are circular with roughly correct periods. We compress the outer distances (and exaggerate sizes) so Neptune still fits on one screen — think of it as a teaching sketch, not a scale model.",
     distanceUnit: "AU",
     bodies: SOLAR_SYSTEM_BODIES
   },
   "near-earth": {
     id: "near-earth",
-    title: "Earth–Moon–satellites",
-    summary: "Earth, ISS, Moon, JWST, and the Sun as a distant scale reference. Use the distance slider to zoom.",
+    title: "Earth, Moon, and nearby space",
+    summary:
+      "Earth always orbits the Sun under solar gravity; ISS, Moon, and JWST ride along. Zoom from LEO out to ~1 AU — the Sun never drops out of the model.",
     note:
-      "Schematic distances. Close-in: Earth-centered (Sun fixed — it does not orbit Earth). Wide view: heliocentric so Earth orbits the Sun with trail. Earth/Moon show a top-down day/night terminator toward the Sun; an arrow marks the Sun when it is off-screen. Sizes exaggerated.",
+      "Heliocentric at every zoom: Earth keeps its yearly orbit and everything shares the Sunward pull. Up close, the camera can ride with Earth while locking the Sun’s direction (so the Sun does not appear to orbit Earth). Zoomed out, body sizes shrink so the orbit stays readable; craft that collapse onto Earth at AU scales are hidden. Distances are schematic.",
     distanceUnit: "km",
     bodies: NEAR_EARTH_BODIES
   },
@@ -224,10 +229,20 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
     id: "earth-pitch",
     title: "Baseball from Earth’s surface",
     summary:
-      "Newton’s cannonball as a pitch: throw harder and watch the path become a long arc, a circular orbit, an ellipse, or a hyperbolic escape.",
+      "Newton’s cannonball, but as a pitch: throw harder and watch the path go from “just falls” to orbit to escape.",
     note:
-      "Idealized airless Earth. Default “fast pitch” is ≪ circular-orbit speed; zoom in until the surface looks flat, then zoom out and raise speed to show orbital regimes. Escape is √2 × v_circ.",
+      "No atmosphere, smooth sphere Earth. Start with a normal hard throw (much slower than orbital speed) while zoomed in so the ground looks flat. Then zoom out and crank the speed toward circular (~1×) and escape (~1.41×).",
     distanceUnit: null,
+    bodies: []
+  },
+  "historic-models": {
+    id: "historic-models",
+    title: "Historic Solar System models",
+    summary:
+      "Ptolemy’s epicycles, Copernicus’s circles, Tycho’s hybrid, and Kepler’s ellipses — schematic orbits that show how strange each worldview looks in motion.",
+    note:
+      "Pick a historical model below. Paths are teaching cartoons (compressed distances, tuned epicycle sizes) so retrograde loops and frame differences read clearly — not fitted Almagest or Rudolphine tables.",
+    distanceUnit: "AU",
     bodies: []
   }
 };
@@ -236,7 +251,8 @@ export const SCENARIO_OPTIONS: { id: ScenarioId; label: string }[] = [
   { id: "playground", label: "Particle playground" },
   { id: "solar-system", label: "Solar System" },
   { id: "near-earth", label: "Earth · Moon · ISS · JWST" },
-  { id: "earth-pitch", label: "Earth surface · baseball pitch" }
+  { id: "historic-models", label: "Historic models (Ptolemy → Kepler)" },
+  { id: "earth-pitch", label: "Baseball pitch from Earth" }
 ];
 
 /** Map AU to canvas orbit radius with compression so Neptune still fits. */
@@ -277,7 +293,8 @@ export function formatDistance(value: number, unit: "AU" | "km"): string {
 /** Near-Earth view half-width slider range (km). */
 export const NEAR_EARTH_VIEW_MIN_KM = 2e3;
 export const NEAR_EARTH_VIEW_MAX_KM = 2e8;
+/** Default shows roughly Moon–JWST neighborhood while following Earth. */
 export const NEAR_EARTH_VIEW_DEFAULT_KM = 5e5;
-/** Above this view half-width, layout is heliocentric (Earth orbits Sun). */
-export const NEAR_EARTH_HELIO_KM = 8e6;
+/** Above this half-width, prefer a Sun-centered view (Earth’s year orbit is the story). */
+export const NEAR_EARTH_WIDE_VIEW_KM = 5e7;
 export const AU_KM = 1.496e8;

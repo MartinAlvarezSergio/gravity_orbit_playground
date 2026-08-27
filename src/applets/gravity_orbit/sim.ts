@@ -11,9 +11,18 @@ import {
   type PitchPresetId
 } from "./earthPitch";
 import {
+  DEFAULT_HISTORIC_MODEL,
+  HISTORIC_TRAIL_LENGTH,
+  createHistoricRuntime,
+  historicModelMeta,
+  stepHistoricRuntime,
+  syncHistoricSelection,
+  type HistoricModelId,
+  type HistoricRuntime
+} from "./historicModels";
+import {
   AU_KM,
   EARTH_YEAR_SIM_SECONDS,
-  NEAR_EARTH_HELIO_KM,
   NEAR_EARTH_VIEW_DEFAULT_KM,
   NEAR_EARTH_VIEW_MAX_KM,
   NEAR_EARTH_VIEW_MIN_KM,
@@ -51,6 +60,8 @@ export type GravityOrbitSim = {
   setSelfGravity: (enabled: boolean) => void;
   setViewHalfWidthKm: (km: number) => void;
   setTimeScale: (scale: number) => void;
+  setHistoricModel: (model: HistoricModelId) => void;
+  getHistoricModel: () => HistoricModelId | null;
   setPitchSpeedFraction: (fraction: number) => void;
   setPitchViewZoom: (zoom: number) => void;
   applyPitchPreset: (presetId: PitchPresetId) => void;
@@ -104,6 +115,44 @@ function sizeToRadius(sizeRank: number, scenario: ScenarioId): number {
     return clamp(sizeRank * 0.85, 4, 26);
   }
   return clamp(sizeRank * 0.9, 3.5, 22);
+}
+
+/** Schematic radii (km). Craft are heavily exaggerated so they stay pickable up close. */
+const NEAR_EARTH_RADIUS_KM: Record<string, number> = {
+  sun: 696_000,
+  earth: 6371,
+  moon: 1737,
+  iss: 0.11,
+  jwst: 0.02
+};
+
+const NEAR_EARTH_SIZE_EXAGGERATION: Record<string, number> = {
+  sun: 0.28,
+  earth: 3.2,
+  moon: 3.2,
+  iss: 12_000,
+  jwst: 25_000
+};
+
+/**
+ * Draw size tracks the view scale so AU-wide shots show Earth as a small dot,
+ * while LEO/Moon views keep bodies readable.
+ */
+function nearEarthDrawRadius(bodyId: string, viewHalfWidthKm: number): number {
+  const maxOrbitPx = Math.min(LOGICAL_WIDTH, LOGICAL_HEIGHT) * 0.42;
+  const rKm =
+    (NEAR_EARTH_RADIUS_KM[bodyId] ?? 1000) * (NEAR_EARTH_SIZE_EXAGGERATION[bodyId] ?? 3);
+  const px = (rKm / Math.max(viewHalfWidthKm, 1)) * maxOrbitPx;
+  if (bodyId === "sun") {
+    return clamp(px, 5, 34);
+  }
+  if (bodyId === "earth") {
+    return clamp(px, 1.5, 22);
+  }
+  if (bodyId === "moon") {
+    return clamp(px, 1.2, 11);
+  }
+  return clamp(px, 1.4, 7.5);
 }
 
 function buildScenarioBodies(
@@ -188,10 +237,6 @@ function periodLabelFor(body: ScenarioBodyDef): string {
   return `~${years.toFixed(years < 20 ? 1 : 0)} yr`;
 }
 
-function isNearEarthHelio(viewHalfWidthKm: number): boolean {
-  return viewHalfWidthKm >= NEAR_EARTH_HELIO_KM;
-}
-
 function kmToOrbitPx(km: number, viewHalfWidthKm: number): number {
   const maxOrbitPx = Math.min(LOGICAL_WIDTH, LOGICAL_HEIGHT) * 0.42;
   return (km / viewHalfWidthKm) * maxOrbitPx;
@@ -217,9 +262,16 @@ function nearEarthOmega(bodyId: string, periodDays: number): number {
   return omegaFromPeriodDays(periodDays);
 }
 
+const NEAR_EARTH_BODIES_DIST: Record<string, number> = {
+  iss: 6771,
+  moon: 384400,
+  jwst: 1.5e6,
+  sun: 0,
+  earth: AU_KM
+};
+
 function buildNearEarthBodies(center: Vec2, viewHalfWidthKm: number): NamedBody[] {
   const def = SCENARIOS["near-earth"];
-  const helio = isNearEarthHelio(viewHalfWidthKm);
   const bodies: NamedBody[] = [];
   const earthAngle = randomInRange(0, Math.PI * 2);
   const moonAngle = randomInRange(0, Math.PI * 2);
@@ -234,39 +286,20 @@ function buildNearEarthBodies(center: Vec2, viewHalfWidthKm: number): NamedBody[
     let omega = 0;
     let distanceValue = body.distance;
 
-    if (helio) {
-      if (body.id === "sun") {
-        isCenter = true;
-        orbitRadiusPx = 0;
-        omega = 0;
-        distanceValue = 0;
-      } else if (body.id === "earth") {
-        orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
-        angle = earthAngle;
-        omega = nearEarthOmega("earth", 365.25);
-        distanceValue = AU_KM;
-      } else if (body.id === "moon" || body.id === "iss" || body.id === "jwst") {
-        orbitRadiusPx = kmToOrbitPx(body.distance, viewHalfWidthKm);
-        angle = body.id === "moon" ? moonAngle : body.id === "iss" ? issAngle : jwstAngle;
-        omega = nearEarthOmega(body.id, body.periodDays);
-      }
-    } else {
-      if (body.id === "earth") {
-        isCenter = true;
-        orbitRadiusPx = 0;
-        omega = 0;
-      } else if (body.id === "sun") {
-        // Fixed distant marker — does not orbit Earth.
-        orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
-        angle = 0;
-        omega = 0;
-        distanceValue = AU_KM;
-      } else {
-        orbitRadiusPx = kmToOrbitPx(body.distance, viewHalfWidthKm);
-        angle =
-          body.id === "moon" ? moonAngle : body.id === "iss" ? issAngle : jwstAngle;
-        omega = nearEarthOmega(body.id, body.periodDays);
-      }
+    if (body.id === "sun") {
+      isCenter = true;
+      orbitRadiusPx = 0;
+      omega = 0;
+      distanceValue = 0;
+    } else if (body.id === "earth") {
+      orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
+      angle = earthAngle;
+      omega = nearEarthOmega("earth", 365.25);
+      distanceValue = AU_KM;
+    } else if (body.id === "moon" || body.id === "iss" || body.id === "jwst") {
+      orbitRadiusPx = kmToOrbitPx(body.distance, viewHalfWidthKm);
+      angle = body.id === "moon" ? moonAngle : body.id === "iss" ? issAngle : jwstAngle;
+      omega = nearEarthOmega(body.id, body.periodDays);
     }
 
     bodies.push({
@@ -276,11 +309,11 @@ function buildNearEarthBodies(center: Vec2, viewHalfWidthKm: number): NamedBody[
       description: body.description,
       visual: body.visual,
       isCenter,
-      drawRadius: sizeToRadius(body.sizeRank, "near-earth"),
+      drawRadius: nearEarthDrawRadius(body.id, viewHalfWidthKm),
       distanceValue,
       distanceUnit: "km",
       periodLabel:
-        body.id === "earth" && helio
+        body.id === "earth"
           ? "~365 days"
           : body.id === "sun"
             ? "—"
@@ -303,149 +336,91 @@ function bodyById(bodies: NamedBody[], id: string): NamedBody | undefined {
   return bodies.find((b) => b.id === id);
 }
 
+/** Always heliocentric: Sun fixed at center; Earth orbits Sun; craft relative to Earth. */
 function placeNearEarthBodies(
   bodies: NamedBody[],
   center: Vec2,
   viewHalfWidthKm: number
 ): void {
-  const helio = isNearEarthHelio(viewHalfWidthKm);
   const sun = bodyById(bodies, "sun");
   const earth = bodyById(bodies, "earth");
   if (!sun || !earth) {
     return;
   }
 
-  if (helio) {
-    sun.isCenter = true;
-    sun.orbitRadiusPx = 0;
-    sun.omega = 0;
-    sun.position = { x: center.x, y: center.y };
-    sun.velocity = { x: 0, y: 0 };
-    sun.acceleration = { x: 0, y: 0 };
-
-    earth.isCenter = false;
-    earth.orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
-    earth.distanceValue = AU_KM;
-    earth.omega = nearEarthOmega("earth", 365.25);
-    earth.position = {
-      x: center.x + Math.cos(earth.angle) * earth.orbitRadiusPx,
-      y: center.y + Math.sin(earth.angle) * earth.orbitRadiusPx
-    };
-    const earthSpeed = Math.abs(earth.omega * earth.orbitRadiusPx);
-    earth.velocity = {
-      x: -Math.sin(earth.angle) * earthSpeed,
-      y: Math.cos(earth.angle) * earthSpeed
-    };
-    earth.acceleration = {
-      x: (center.x - earth.position.x) * earth.omega * earth.omega,
-      y: (center.y - earth.position.y) * earth.omega * earth.omega
-    };
-
-    for (const body of bodies) {
-      if (body.id === "sun" || body.id === "earth") {
-        continue;
-      }
-      body.isCenter = false;
-      const catalogKm = NEAR_EARTH_BODIES_DIST[body.id] ?? body.distanceValue;
-      body.distanceValue = catalogKm;
-      body.orbitRadiusPx = kmToOrbitPx(catalogKm, viewHalfWidthKm);
-      if (body.id === "jwst") {
-        // Stay near anti-Sun (Sun–Earth L2 direction).
-        body.angle = earth.angle + Math.PI;
-        body.omega = 0;
-      }
-      const useAngle = body.angle;
-      const relR = body.orbitRadiusPx;
-      body.position = {
-        x: earth.position.x + Math.cos(useAngle) * relR,
-        y: earth.position.y + Math.sin(useAngle) * relR
-      };
-      const relSpeed = Math.abs(body.omega * relR);
-      const relVx = -Math.sin(useAngle) * relSpeed;
-      const relVy = Math.cos(useAngle) * relSpeed;
-      body.velocity = {
-        x: earth.velocity.x + relVx,
-        y: earth.velocity.y + relVy
-      };
-      body.acceleration = {
-        x: (earth.position.x - body.position.x) * (body.omega * body.omega || earth.omega * earth.omega),
-        y: (earth.position.y - body.position.y) * (body.omega * body.omega || earth.omega * earth.omega)
-      };
-    }
-    return;
-  }
-
-  // Geocentric: Earth fixed; Sun is a stationary distant marker.
-  earth.isCenter = true;
-  earth.orbitRadiusPx = 0;
-  earth.omega = 0;
-  earth.distanceValue = 0;
-  earth.position = { x: center.x, y: center.y };
-  earth.velocity = { x: 0, y: 0 };
-  earth.acceleration = { x: 0, y: 0 };
-
-  sun.isCenter = false;
-  sun.orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
-  sun.distanceValue = AU_KM;
+  sun.isCenter = true;
+  sun.orbitRadiusPx = 0;
   sun.omega = 0;
-  sun.position = {
-    x: center.x + Math.cos(sun.angle) * sun.orbitRadiusPx,
-    y: center.y + Math.sin(sun.angle) * sun.orbitRadiusPx
-  };
+  sun.distanceValue = 0;
+  sun.drawRadius = nearEarthDrawRadius("sun", viewHalfWidthKm);
+  sun.position = { x: center.x, y: center.y };
   sun.velocity = { x: 0, y: 0 };
   sun.acceleration = { x: 0, y: 0 };
 
+  earth.isCenter = false;
+  earth.orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
+  earth.distanceValue = AU_KM;
+  earth.omega = nearEarthOmega("earth", 365.25);
+  earth.drawRadius = nearEarthDrawRadius("earth", viewHalfWidthKm);
+  earth.position = {
+    x: center.x + Math.cos(earth.angle) * earth.orbitRadiusPx,
+    y: center.y + Math.sin(earth.angle) * earth.orbitRadiusPx
+  };
+  const earthSpeed = Math.abs(earth.omega * earth.orbitRadiusPx);
+  earth.velocity = {
+    x: -Math.sin(earth.angle) * earthSpeed,
+    y: Math.cos(earth.angle) * earthSpeed
+  };
+  // Sunward centripetal acceleration — always present at every zoom.
+  earth.acceleration = {
+    x: (center.x - earth.position.x) * earth.omega * earth.omega,
+    y: (center.y - earth.position.y) * earth.omega * earth.omega
+  };
+
   for (const body of bodies) {
-    if (body.id === "earth" || body.id === "sun") {
+    if (body.id === "sun" || body.id === "earth") {
       continue;
     }
     body.isCenter = false;
-    body.orbitRadiusPx = kmToOrbitPx(body.distanceValue, viewHalfWidthKm);
+    const catalogKm = NEAR_EARTH_BODIES_DIST[body.id] ?? body.distanceValue;
+    body.distanceValue = catalogKm;
+    body.orbitRadiusPx = kmToOrbitPx(catalogKm, viewHalfWidthKm);
+    body.drawRadius = nearEarthDrawRadius(body.id, viewHalfWidthKm);
+    if (body.id === "jwst") {
+      // Stay near anti-Sun (Sun–Earth L2 direction).
+      body.angle = earth.angle + Math.PI;
+      body.omega = 0;
+    }
+    const useAngle = body.angle;
+    const relR = body.orbitRadiusPx;
     body.position = {
-      x: center.x + Math.cos(body.angle) * body.orbitRadiusPx,
-      y: center.y + Math.sin(body.angle) * body.orbitRadiusPx
+      x: earth.position.x + Math.cos(useAngle) * relR,
+      y: earth.position.y + Math.sin(useAngle) * relR
     };
-    const speed = Math.abs(body.omega * body.orbitRadiusPx);
+    const relSpeed = Math.abs(body.omega * relR);
+    const relVx = -Math.sin(useAngle) * relSpeed;
+    const relVy = Math.cos(useAngle) * relSpeed;
+    // Co-orbit with Earth around the Sun, plus any local Earth-centered motion.
     body.velocity = {
-      x: -Math.sin(body.angle) * speed,
-      y: Math.cos(body.angle) * speed
+      x: earth.velocity.x + relVx,
+      y: earth.velocity.y + relVy
     };
+    const localW2 = body.omega * body.omega;
     body.acceleration = {
-      x: (center.x - body.position.x) * body.omega * body.omega,
-      y: (center.y - body.position.y) * body.omega * body.omega
+      x: earth.acceleration.x + (earth.position.x - body.position.x) * localW2,
+      y: earth.acceleration.y + (earth.position.y - body.position.y) * localW2
     };
   }
 }
-
-const NEAR_EARTH_BODIES_DIST: Record<string, number> = {
-  iss: 6771,
-  moon: 384400,
-  jwst: 1.5e6,
-  sun: AU_KM,
-  earth: AU_KM
-};
 
 function reprojectNearEarthBodies(
   bodies: NamedBody[],
   center: Vec2,
   viewHalfWidthKm: number
 ): void {
-  const wasHelio = bodies.some((b) => b.id === "sun" && b.isCenter);
-  const helio = isNearEarthHelio(viewHalfWidthKm);
-  if (wasHelio !== helio) {
-    for (const body of bodies) {
-      body.trail = [];
-    }
-    // Restore catalog distances when flipping layout.
-    for (const body of bodies) {
-      if (body.id === "earth") {
-        body.distanceValue = helio ? AU_KM : 0;
-      } else if (body.id === "sun") {
-        body.distanceValue = helio ? 0 : AU_KM;
-      } else {
-        body.distanceValue = NEAR_EARTH_BODIES_DIST[body.id] ?? body.distanceValue;
-      }
-    }
+  // Scale changes jump screen positions; drop trails so they do not smear.
+  for (const body of bodies) {
+    body.trail = [];
   }
   placeNearEarthBodies(bodies, center, viewHalfWidthKm);
 }
@@ -462,6 +437,19 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
   let particles = createInitialParticles(center, centerMass, particleCount);
   let bodies: NamedBody[] = [];
   let earthPitch: EarthPitchState | null = null;
+  let historic: HistoricRuntime | null = null;
+
+  function historicMaxOrbitPx(): number {
+    return Math.min(LOGICAL_WIDTH, LOGICAL_HEIGHT) * 0.42;
+  }
+
+  function loadHistoric(model: HistoricModelId): void {
+    historic = createHistoricRuntime(model, center, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+    bodies = historic.bodies;
+    selectedBodyId = historic.selectedBodyId;
+    earthPitch = null;
+    particles = [];
+  }
 
   function addTrailPoint(trail: Vec2[], point: Vec2, maxLen: number): void {
     trail.push({ x: point.x, y: point.y });
@@ -519,6 +507,7 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
     scenario = next;
     selectedBodyId = null;
     earthPitch = null;
+    historic = null;
     if (next === "playground") {
       bodies = [];
       particles = createInitialParticles(center, centerMass, particleCount);
@@ -530,10 +519,18 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
       earthPitch = createEarthPitchState();
       return;
     }
+    if (next === "historic-models") {
+      loadHistoric(DEFAULT_HISTORIC_MODEL);
+      return;
+    }
     particles = [];
     bodies = buildScenarioBodies(next, center, viewHalfWidthKm);
-    const firstOrbiting = bodies.find((b) => !b.isCenter);
-    selectedBodyId = firstOrbiting?.id ?? bodies[0]?.id ?? null;
+    if (next === "near-earth") {
+      selectedBodyId = bodies.find((b) => b.id === "earth")?.id ?? null;
+    } else {
+      const firstOrbiting = bodies.find((b) => !b.isCenter);
+      selectedBodyId = firstOrbiting?.id ?? bodies[0]?.id ?? null;
+    }
   }
 
   function stepPlayground(clampedDt: number): void {
@@ -570,6 +567,10 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
       stepNearEarth(clampedDt);
       return;
     }
+    if (scenario === "historic-models" && historic) {
+      stepHistoric(clampedDt);
+      return;
+    }
     for (const body of bodies) {
       if (body.isCenter) {
         body.position = { x: center.x, y: center.y };
@@ -595,8 +596,27 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
     }
   }
 
+  function stepHistoric(clampedDt: number): void {
+    if (!historic) {
+      return;
+    }
+    syncHistoricSelection(historic, selectedBodyId);
+    stepHistoricRuntime(
+      historic,
+      center,
+      historicMaxOrbitPx(),
+      clampedDt * timeScale
+    );
+    bodies = historic.bodies;
+    for (const body of bodies) {
+      if (body.isCenter) {
+        continue;
+      }
+      addTrailPoint(body.trail, body.position, HISTORIC_TRAIL_LENGTH);
+    }
+  }
+
   function stepNearEarth(clampedDt: number): void {
-    const helio = isNearEarthHelio(viewHalfWidthKm);
     const dt = clampedDt * timeScale;
     const earth = bodyById(bodies, "earth");
     const sun = bodyById(bodies, "sun");
@@ -604,37 +624,19 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
       return;
     }
 
-    if (helio) {
-      earth.angle += earth.omega * dt;
-      for (const body of bodies) {
-        if (body.id === "moon" || body.id === "iss") {
-          body.angle += body.omega * dt;
-        }
-      }
-      placeNearEarthBodies(bodies, center, viewHalfWidthKm);
-      // Trails: Earth around the Sun; satellites around Earth (not the Sun).
-      addTrailPoint(earth.trail, earth.position, TRAIL_LENGTH);
-      for (const body of bodies) {
-        if (body.id === "moon" || body.id === "iss" || body.id === "jwst") {
-          addTrailPoint(body.trail, body.position, TRAIL_LENGTH);
-        }
-      }
-      return;
-    }
-
-    // Geocentric: Earth fixed; Sun fixed; satellites orbit Earth.
+    earth.angle += earth.omega * dt;
     for (const body of bodies) {
-      if (body.id === "earth" || body.id === "sun") {
-        continue;
+      if (body.id === "moon" || body.id === "iss") {
+        body.angle += body.omega * dt;
       }
-      body.angle += body.omega * dt;
     }
     placeNearEarthBodies(bodies, center, viewHalfWidthKm);
+    // Trails: Earth around the Sun; satellites around Earth (not the Sun).
+    addTrailPoint(earth.trail, earth.position, TRAIL_LENGTH);
     for (const body of bodies) {
-      if (body.id === "earth" || body.id === "sun") {
-        continue;
+      if (body.id === "moon" || body.id === "iss" || body.id === "jwst") {
+        addTrailPoint(body.trail, body.position, TRAIL_LENGTH);
       }
-      addTrailPoint(body.trail, body.position, TRAIL_LENGTH);
     }
   }
 
@@ -685,6 +687,15 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
         setEarthPitchTimeScale(earthPitch, scale);
       }
     },
+    setHistoricModel(model: HistoricModelId): void {
+      if (scenario !== "historic-models") {
+        return;
+      }
+      loadHistoric(model);
+    },
+    getHistoricModel(): HistoricModelId | null {
+      return scenario === "historic-models" && historic ? historic.model : null;
+    },
     setPitchSpeedFraction(fraction: number): void {
       if (!earthPitch) {
         return;
@@ -733,6 +744,12 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
     },
     selectBody(id: string | null): void {
       selectedBodyId = id;
+      if (historic) {
+        syncHistoricSelection(historic, id);
+        // Refresh guides so emphasize flags update without waiting a step.
+        stepHistoricRuntime(historic, center, historicMaxOrbitPx(), 0);
+        bodies = historic.bodies;
+      }
     },
     getSelectedInfo(): SelectedBodyInfo | null {
       if (!selectedBodyId) {
@@ -743,13 +760,26 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
         return null;
       }
       const speed = magnitude(body.velocity);
+      let distanceLabel: string;
+      if (body.isCenter) {
+        distanceLabel = "center";
+      } else if (scenario === "near-earth" && body.id === "earth") {
+        distanceLabel = `${formatDistance(AU_KM, "km")} from Sun`;
+      } else if (scenario === "near-earth") {
+        distanceLabel = `${formatDistance(body.distanceValue, body.distanceUnit)} from Earth`;
+      } else if (scenario === "historic-models") {
+        distanceLabel =
+          body.distanceUnit === "AU"
+            ? `~${body.distanceValue.toFixed(body.distanceValue < 2 ? 2 : 1)} AU (schematic)`
+            : formatDistance(body.distanceValue, body.distanceUnit);
+      } else {
+        distanceLabel = formatDistance(body.distanceValue, body.distanceUnit);
+      }
       return {
         id: body.id,
         name: body.name,
         description: body.description,
-        distanceLabel: body.isCenter
-          ? "center"
-          : formatDistance(body.distanceValue, body.distanceUnit),
+        distanceLabel,
         periodLabel: body.periodLabel,
         speedLabel: scenario === "playground" ? `${speed.toFixed(1)}` : body.periodLabel
       };
@@ -799,9 +829,13 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
         selectedBodyId,
         viewHalfWidthKm: scenario === "near-earth" ? viewHalfWidthKm : null,
         earthPitch: earthPitch,
+        historicModel: historic?.model ?? null,
+        historicGuides: historic?.guides ?? [],
         totalKineticEnergy,
         averageSpeed: speedCount > 0 ? speedSum / speedCount : 0,
-        note: earthPitch?.note ?? SCENARIOS[scenario].note
+        note:
+          earthPitch?.note ??
+          (historic ? historicModelMeta(historic.model).note : SCENARIOS[scenario].note)
       };
     },
     reset(): void {
@@ -811,6 +845,18 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
       }
       if (scenario === "earth-pitch" && earthPitch) {
         resetEarthPitchBall(earthPitch);
+        return;
+      }
+      if (scenario === "historic-models" && historic) {
+        const keepModel = historic.model;
+        const keepSelected = selectedBodyId;
+        loadHistoric(keepModel);
+        if (keepSelected && bodies.some((b) => b.id === keepSelected)) {
+          selectedBodyId = keepSelected;
+          syncHistoricSelection(historic, keepSelected);
+          stepHistoricRuntime(historic, center, historicMaxOrbitPx(), 0);
+          bodies = historic.bodies;
+        }
         return;
       }
       const keepSelected = selectedBodyId;

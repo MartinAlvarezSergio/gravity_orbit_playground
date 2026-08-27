@@ -22,9 +22,16 @@ import {
   type PitchRegime
 } from "./earthPitch";
 import {
+  DEFAULT_HISTORIC_MODEL,
+  HISTORIC_MODEL_OPTIONS,
+  type HistoricModelId
+} from "./historicModels";
+import {
+  AU_KM,
   NEAR_EARTH_VIEW_DEFAULT_KM,
   NEAR_EARTH_VIEW_MAX_KM,
   NEAR_EARTH_VIEW_MIN_KM,
+  NEAR_EARTH_WIDE_VIEW_KM,
   SCENARIOS,
   SCENARIO_OPTIONS,
   formatDistance
@@ -74,6 +81,19 @@ function clampNearEarthViewForBody(distanceKm: number): number {
   );
 }
 
+/** View scale that fits each near-Earth target without flipping the heliocentric frame. */
+function nearEarthViewForBody(bodyId: string, distanceKm: number): number {
+  if (bodyId === "sun") {
+    // Wide enough to see Earth's yearly orbit around the Sun.
+    return clampNearEarthViewForBody(AU_KM);
+  }
+  if (bodyId === "earth") {
+    // Neighborhood that includes Moon + JWST while staying on Earth.
+    return clampNearEarthViewForBody(1.5e6);
+  }
+  return clampNearEarthViewForBody(distanceKm);
+}
+
 export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragRef = useRef(false);
@@ -99,6 +119,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
   const [kineticEnergy, setKineticEnergy] = useState(0);
   const [selected, setSelected] = useState<SelectedBodyInfo | null>(null);
   const [scenarioNote, setScenarioNote] = useState(SCENARIOS["solar-system"].note);
+  const [historicModel, setHistoricModel] = useState<HistoricModelId>(DEFAULT_HISTORIC_MODEL);
 
   const reducedMotion = host?.readReducedMotion?.() ?? false;
   const sim = useMemo(() => {
@@ -149,8 +170,42 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
         };
       }
       setRunning(true);
+    } else if (scenario === "near-earth") {
+      // Default: follow Earth so LEO–JWST stays on screen while Earth still orbits the Sun.
+      setViewHalfWidthKm(NEAR_EARTH_VIEW_DEFAULT_KM);
+      sim.setViewHalfWidthKm(NEAR_EARTH_VIEW_DEFAULT_KM);
+      sim.selectBody("earth");
+      setSelected(sim.getSelectedInfo());
+      setFollowSelected(true);
+      const earth = sim.getSelectedBody();
+      if (earth) {
+        cameraRef.current = {
+          ...defaultCamera(CANVAS_W, CANVAS_H),
+          focus: { x: earth.position.x, y: earth.position.y }
+        };
+      }
+    } else if (scenario === "historic-models") {
+      setHistoricModel(DEFAULT_HISTORIC_MODEL);
+      sim.setHistoricModel(DEFAULT_HISTORIC_MODEL);
+      setScenarioNote(sim.getSnapshot().note);
+      setSelected(sim.getSelectedInfo());
+      setFollowSelected(false);
+      setShowTrails(true);
+      setRunning(true);
     }
   }, [scenario, sim]);
+
+  useEffect(() => {
+    if (scenario !== "historic-models") {
+      return;
+    }
+    sim.setHistoricModel(historicModel);
+    setScenarioNote(sim.getSnapshot().note);
+    setSelected(sim.getSelectedInfo());
+    cameraRef.current = defaultCamera(CANVAS_W, CANVAS_H);
+    setCameraZoom(1);
+    setFollowSelected(false);
+  }, [historicModel, scenario, sim]);
 
   useEffect(() => {
     sim.setCenterMass(centralMass);
@@ -166,7 +221,31 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
 
   useEffect(() => {
     sim.setViewHalfWidthKm(viewHalfWidthKm);
-  }, [viewHalfWidthKm, sim]);
+    if (scenario !== "near-earth") {
+      return;
+    }
+    // Wide: Sun-centered heliocentric portrait. Close: ride with Earth, Sun direction locked.
+    if (viewHalfWidthKm >= NEAR_EARTH_WIDE_VIEW_KM) {
+      setFollowSelected(false);
+      sim.selectBody("earth");
+      setSelected(sim.getSelectedInfo());
+      cameraRef.current = {
+        ...defaultCamera(CANVAS_W, CANVAS_H),
+        zoom: cameraRef.current.zoom,
+        rotation: 0
+      };
+      return;
+    }
+    if (followSelected) {
+      const body = sim.getSelectedBody();
+      if (body) {
+        cameraRef.current = {
+          ...cameraRef.current,
+          focus: { x: body.position.x, y: body.position.y }
+        };
+      }
+    }
+  }, [viewHalfWidthKm, sim, scenario, followSelected]);
 
   useEffect(() => {
     sim.setTimeScale(timeScale);
@@ -204,17 +283,58 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
         if (followRef.current && pitch.ball.flying) {
           cameraRef.current = {
             ...cameraRef.current,
+            rotation: 0,
             focus: { x: pitch.ball.position.x, y: pitch.ball.position.y }
           };
         } else {
           cameraRef.current = {
             ...cameraRef.current,
+            rotation: 0,
             focus: earthPitchCameraFocus(pitch, cameraRef.current.zoom)
+          };
+        }
+      } else if (snapshot.scenario === "near-earth") {
+        const sun = snapshot.bodies.find((b) => b.id === "sun");
+        const earth = snapshot.bodies.find((b) => b.id === "earth");
+        const wide = (snapshot.viewHalfWidthKm ?? 0) >= NEAR_EARTH_WIDE_VIEW_KM;
+        const followBody = followRef.current ? selectedBody : null;
+        if (followBody && earth && sun && followBody.id !== "sun") {
+          // Ride with the selection, but lock orientation to the Sun–Earth line so the
+          // Sun stays a fixed direction (never looks like it orbits Earth).
+          const focus =
+            followBody.id === "earth" ? earth.position : followBody.position;
+          const sunAngle = Math.atan2(
+            earth.position.y - sun.position.y,
+            earth.position.x - sun.position.x
+          );
+          cameraRef.current = {
+            ...cameraRef.current,
+            focus: { x: focus.x, y: focus.y },
+            // Sun appears to the left of Earth in screen space.
+            rotation: -sunAngle + Math.PI
+          };
+        } else if (wide && sun) {
+          cameraRef.current = {
+            ...cameraRef.current,
+            rotation: 0,
+            focus: { x: sun.position.x, y: sun.position.y }
+          };
+        } else if (followBody?.id === "sun" && sun) {
+          cameraRef.current = {
+            ...cameraRef.current,
+            rotation: 0,
+            focus: { x: sun.position.x, y: sun.position.y }
+          };
+        } else {
+          cameraRef.current = {
+            ...cameraRef.current,
+            rotation: 0
           };
         }
       } else if (followRef.current && selectedBody) {
         cameraRef.current = {
           ...cameraRef.current,
+          rotation: 0,
           focus: { x: selectedBody.position.x, y: selectedBody.position.y }
         };
       }
@@ -309,8 +429,8 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
     if (!body) {
       return;
     }
-    if (scenario === "near-earth" && !body.isCenter) {
-      const nextView = clampNearEarthViewForBody(body.distanceValue);
+    if (scenario === "near-earth") {
+      const nextView = nearEarthViewForBody(body.id, body.distanceValue);
       setViewHalfWidthKm(nextView);
       sim.setViewHalfWidthKm(nextView);
     }
@@ -337,6 +457,27 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
         ...defaultCamera(CANVAS_W, CANVAS_H),
         zoom,
         focus: pitch ? earthPitchCameraFocus(pitch, zoom) : defaultCamera(CANVAS_W, CANVAS_H).focus
+      };
+      return;
+    }
+    if (scenario === "near-earth") {
+      setCameraZoom(1);
+      const wide = viewHalfWidthKm >= NEAR_EARTH_WIDE_VIEW_KM;
+      setFollowSelected(!wide);
+      if (!wide) {
+        sim.selectBody("earth");
+        setSelected(sim.getSelectedInfo());
+      }
+      const body = wide ? null : sim.getSelectedBody();
+      const sun = sim.getSnapshot().bodies.find((b) => b.id === "sun");
+      cameraRef.current = {
+        ...defaultCamera(CANVAS_W, CANVAS_H),
+        focus: body
+          ? { x: body.position.x, y: body.position.y }
+          : sun
+            ? { x: sun.position.x, y: sun.position.y }
+            : defaultCamera(CANVAS_W, CANVAS_H).focus,
+        rotation: 0
       };
       return;
     }
@@ -427,8 +568,11 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
   const isPlayground = scenario === "playground";
   const isNearEarth = scenario === "near-earth";
   const isEarthPitch = scenario === "earth-pitch";
-  const isNamedOrbit = scenario === "solar-system" || scenario === "near-earth";
+  const isHistoric = scenario === "historic-models";
+  const isNamedOrbit = scenario === "solar-system" || scenario === "near-earth" || isHistoric;
   const scenarioMeta = SCENARIOS[scenario];
+  const historicMeta =
+    HISTORIC_MODEL_OPTIONS.find((m) => m.id === historicModel) ?? HISTORIC_MODEL_OPTIONS[0];
 
   const overlayControls = (
     <div className="gravity-canvas-toolbar" role="toolbar" aria-label="Playback controls">
@@ -452,10 +596,10 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
 
   return (
     <div className="gravity-layout">
-      <ControlCard title="Gravity Orbit Controls" subtitle={scenarioMeta.summary}>
+      <ControlCard title="Gravity Orbits & The Solar System" subtitle={scenarioMeta.summary}>
         <div className="control-grid">
           <label className="control-span-2">
-            Scenario
+            What do you want to explore?
             <select
               value={scenario}
               onChange={(event) => setScenario(event.target.value as ScenarioId)}
@@ -475,7 +619,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
             <>
               <label className="control-span-2">
                 <span className="slider-label">
-                  <span>Central mass:</span>
+                  <span>Central mass</span>
                   <strong>{Math.round(centralMass)}</strong>
                 </span>
                 <input
@@ -489,7 +633,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
 
               <label className="control-span-2">
                 <span className="slider-label">
-                  <span>Number of particles:</span>
+                  <span>Number of particles</span>
                   <strong>{Math.round(particleCount)}</strong>
                 </span>
                 <input
@@ -508,7 +652,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                   checked={selfGravity}
                   onChange={(event) => setSelfGravity(event.target.checked)}
                 />
-                Enable self-gravity between particles
+                Let particles attract each other
               </label>
             </>
           ) : null}
@@ -526,14 +670,15 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                   </span>
                 </div>
                 <p>
-                  Default is a fast everyday pitch (≪ v_circ) with the camera zoomed in so Earth looks
-                  flat. Zoom out to recover the globe, then raise speed toward circular / escape.
+                  Start zoomed in with a hard throw: the ground looks flat and the ball falls.
+                  Zoom out to see the globe, then raise the speed toward circular (~1×) and escape
+                  (~1.41×).
                 </p>
               </div>
 
               <label className="control-span-2">
                 <span className="slider-label">
-                  <span>Pitch speed:</span>
+                  <span>Pitch speed</span>
                   <strong>{formatPitchSpeedFraction(pitchSpeed)}</strong>
                 </span>
                 <input
@@ -545,7 +690,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                   onChange={(event) => onPitchSpeedChange(Number(event.target.value))}
                 />
                 <span className="gravity-distance-hints">
-                  Markers: fast ≈ 0.05× · circular 1.00× · escape ≈ 1.41×
+                  Handy markers: hard throw ≈ 0.05× · circular 1.00× · escape ≈ 1.41×
                 </span>
               </label>
 
@@ -569,7 +714,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
 
               <label className="control-span-2">
                 <span className="slider-label">
-                  <span>Orbit time scale:</span>
+                  <span>Time scale</span>
                   <strong>{timeScale.toFixed(1)}×</strong>
                 </span>
                 <input
@@ -584,7 +729,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
 
               <label className="control-span-2">
                 <span className="slider-label">
-                  <span>Camera zoom:</span>
+                  <span>Camera zoom</span>
                   <strong>{cameraZoom.toFixed(1)}×</strong>
                 </span>
                 <input
@@ -598,8 +743,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                   }
                 />
                 <span className="gravity-distance-hints">
-                  Zoom in: ground flattens (pitcher/ball stay fixed size). Zoom out: Earth becomes a
-                  globe again.
+                  Zoom in for a flat “local” horizon; zoom out to see Earth as a globe again.
                 </span>
               </label>
 
@@ -630,7 +774,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
             <>
               <label className="control-span-2">
                 <span className="slider-label">
-                  <span>Orbit time scale:</span>
+                  <span>Time scale</span>
                   <strong>{timeScale.toFixed(1)}×</strong>
                 </span>
                 <input
@@ -643,10 +787,33 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                 />
               </label>
 
+              {isHistoric ? (
+                <div className="control-span-2">
+                  <label>
+                    Historical model
+                    <select
+                      value={historicModel}
+                      onChange={(event) => setHistoricModel(event.target.value as HistoricModelId)}
+                      aria-label="Historical Solar System model"
+                    >
+                      {HISTORIC_MODEL_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label} ({opt.yearHint})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="gravity-distance-hints" style={{ marginTop: "0.45rem" }}>
+                    <strong>{historicMeta.bizarreHook}</strong> {historicMeta.summary} Leave trails
+                    on; in Ptolemy, keep Mars selected to watch the epicycle loops.
+                  </p>
+                </div>
+              ) : null}
+
               {isNearEarth ? (
                 <label className="control-span-2">
                   <span className="slider-label">
-                    <span>Distance (view half-width):</span>
+                    <span>How much space is in view?</span>
                     <strong>{formatDistance(viewHalfWidthKm, "km")}</strong>
                   </span>
                   <input
@@ -658,16 +825,16 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                     onChange={(event) => setViewHalfWidthKm(sliderToKm(Number(event.target.value)))}
                   />
                   <span className="gravity-distance-hints">
-                    Physical scale from LEO (~ISS) out past the Moon and JWST toward 1 AU. Wide
-                    views switch to heliocentric: Earth orbits the Sun (with trail); the Sun does
-                    not orbit Earth.
+                    Zoom from LEO out toward 1 AU. Earth always orbits the Sun (solar gravity never
+                    switches off). Far out, bodies shrink so the year orbit stays clear; close in,
+                    follow Earth with the Sun held in a fixed direction.
                   </span>
                 </label>
               ) : null}
 
               <label className="control-span-2">
                 <span className="slider-label">
-                  <span>Camera zoom:</span>
+                  <span>Camera zoom</span>
                   <strong>{cameraZoom.toFixed(1)}×</strong>
                 </span>
                 <input
@@ -692,7 +859,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                     }
                   }}
                 />
-                Follow selected body
+                Keep the camera on the selected body
               </label>
 
               <div className="button-row control-span-2">
@@ -723,14 +890,19 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                 </div>
               ) : (
                 <p className="subtle control-span-2">
-                  Click a body to select it, then enable Follow or Zoom & follow.
+                  Click a body (or a chip below) to select it, then try Follow or Zoom & follow.
                 </p>
               )}
 
               <div className="gravity-body-list control-span-2" role="list">
                 {(scenario === "solar-system"
                   ? SCENARIOS["solar-system"].bodies
-                  : SCENARIOS["near-earth"].bodies
+                  : scenario === "near-earth"
+                    ? SCENARIOS["near-earth"].bodies
+                    : sim.getSnapshot().bodies.map((b) => ({
+                        id: b.id,
+                        shortLabel: b.shortLabel
+                      }))
                 ).map((body) => (
                   <button
                     key={body.id}
@@ -763,7 +935,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
               checked={showVelocityVectors}
               onChange={(event) => setShowVelocityVectors(event.target.checked)}
             />
-            Show velocity vectors
+            Show velocity (green)
           </label>
 
           <label className="checkbox control-span-2">
@@ -772,7 +944,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
               checked={showForceVectors}
               onChange={(event) => setShowForceVectors(event.target.checked)}
             />
-            Show gravitational pull (force) vectors
+            Show gravitational pull (orange)
           </label>
 
           <div className="button-row control-span-2">
