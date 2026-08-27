@@ -216,7 +216,7 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
     title: "Earth–Moon–satellites",
     summary: "Earth, ISS, Moon, JWST, and the Sun as a distant scale reference. Use the distance slider to zoom.",
     note:
-      "Schematic distances. Close-in: Earth-centered (Sun fixed — it does not orbit Earth). Wide view: heliocentric so Earth orbits the Sun with trail. Sizes exaggerated.",
+      "Schematic distances. Close-in: Earth-centered (Sun fixed — it does not orbit Earth). Wide view: heliocentric so Earth orbits the Sun with trail. Earth/Moon show a top-down day/night terminator toward the Sun; an arrow marks the Sun when it is off-screen. Sizes exaggerated.",
     distanceUnit: "km",
     bodies: NEAR_EARTH_BODIES
   },

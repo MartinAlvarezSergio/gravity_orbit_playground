@@ -1,4 +1,4 @@
-import { applyCameraTransform, type CameraView } from "./camera";
+import { applyCameraTransform, worldToScreen, type CameraView } from "./camera";
 import { drawNamedBody } from "./bodyVisuals";
 import { renderEarthPitchWorld } from "./earthPitchRender";
 import { formatDistance } from "./scenarios";
@@ -235,12 +235,86 @@ function visibleScenarioBodies(snapshot: GravitySnapshot, camera: CameraView): N
   return snapshot.bodies.filter((b) => b.isCenter || b.orbitRadiusPx <= maxR * 1.25);
 }
 
+function isBodyOnScreen(
+  body: NamedBody,
+  camera: CameraView,
+  marginPx = 28
+): boolean {
+  const screen = worldToScreen(camera, body.position);
+  const pad = marginPx + body.drawRadius * camera.zoom;
+  return (
+    screen.x >= -pad &&
+    screen.x <= camera.width + pad &&
+    screen.y >= -pad &&
+    screen.y <= camera.height + pad
+  );
+}
+
+/**
+ * When the Sun is off-screen in the near-Earth scenario, point from Earth toward it.
+ * Drawn in world space while the camera transform is active.
+ */
+function drawSunDirectionHint(
+  ctx: CanvasRenderingContext2D,
+  earth: NamedBody,
+  sun: NamedBody,
+  camera: CameraView
+): void {
+  if (isBodyOnScreen(sun, camera, 36)) {
+    return;
+  }
+  const dx = sun.position.x - earth.position.x;
+  const dy = sun.position.y - earth.position.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) {
+    return;
+  }
+  const ux = dx / len;
+  const uy = dy / len;
+  // Keep arrow length roughly constant on screen across zooms.
+  const arrowLen = Math.max(42, 56 / camera.zoom);
+  const startPad = earth.drawRadius + 6 / camera.zoom;
+  const x0 = earth.position.x + ux * startPad;
+  const y0 = earth.position.y + uy * startPad;
+  const x1 = x0 + ux * arrowLen;
+  const y1 = y0 + uy * arrowLen;
+
+  drawArrow(ctx, x0, y0, x1 - x0, y1 - y0, "rgba(255, 210, 110, 0.95)");
+
+  ctx.save();
+  const labelX = x1 + ux * (10 / camera.zoom);
+  const labelY = y1 + uy * (10 / camera.zoom);
+  const fontPx = Math.max(10, 12 / camera.zoom);
+  ctx.font = `700 ${fontPx}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = Math.max(2.5, 3.2 / camera.zoom);
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
+  ctx.fillStyle = "rgba(255, 230, 150, 1)";
+  ctx.strokeText("Sun", labelX, labelY);
+  ctx.fillText("Sun", labelX, labelY);
+  ctx.restore();
+}
+
 function drawScenarioBodies(
   ctx: CanvasRenderingContext2D,
   snapshot: GravitySnapshot,
   options: RenderOptions,
   visible: NamedBody[]
 ): void {
+  const sun =
+    snapshot.scenario === "near-earth"
+      ? snapshot.bodies.find((b) => b.id === "sun")
+      : undefined;
+  const earth =
+    snapshot.scenario === "near-earth"
+      ? snapshot.bodies.find((b) => b.id === "earth")
+      : undefined;
+
+  if (snapshot.scenario === "near-earth" && earth && sun) {
+    drawSunDirectionHint(ctx, earth, sun, options.camera);
+  }
+
   for (const body of visible) {
     const showVectors = !body.isCenter || (snapshot.scenario === "near-earth" && body.id === "earth");
     if (showVectors && options.showForceVectors) {
@@ -270,9 +344,18 @@ function drawScenarioBodies(
       }
     }
 
+    const lightToSun =
+      sun && (body.id === "earth" || body.id === "moon")
+        ? {
+            x: sun.position.x - body.position.x,
+            y: sun.position.y - body.position.y
+          }
+        : undefined;
+
     drawNamedBody(ctx, body.visual, body.position.x, body.position.y, body.drawRadius, {
       selected: snapshot.selectedBodyId === body.id,
-      label: body.shortLabel
+      label: body.shortLabel,
+      lightToSun
     });
   }
 }

@@ -3,6 +3,11 @@ import { BodyVisualKind } from "./types";
 type DrawBodyOptions = {
   selected?: boolean;
   label?: string;
+  /**
+   * Direction from the body toward the Sun (world space). When set for Earth/Moon in
+   * near-Earth mode, paints a schematic night-side terminator (top-down orbital view).
+   */
+  lightToSun?: { x: number; y: number };
 };
 
 function withShadow(
@@ -69,6 +74,65 @@ function drawSelectionRing(
   ctx.setLineDash([4, 3]);
   ctx.beginPath();
   ctx.arc(x, y, r + 5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * Top-down night hemisphere: sunward half stays lit, anti-sun half darkened.
+ * This matches a face-on ecliptic view (always ~half-phase), not a sky-view Moon.
+ */
+function drawNightHemisphere(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  toSunX: number,
+  toSunY: number
+): void {
+  const len = Math.hypot(toSunX, toSunY);
+  if (len < 1e-8 || r < 1.5) {
+    return;
+  }
+  const angle = Math.atan2(toSunY / len, toSunX / len);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.clip();
+
+  ctx.fillStyle = "rgba(2, 8, 20, 0.66)";
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  // Counterclockwise from +90° to −90° relative to the sunward axis covers the night side.
+  ctx.arc(x, y, r + 0.75, angle + Math.PI / 2, angle - Math.PI / 2, false);
+  ctx.closePath();
+  ctx.fill();
+
+  // Soft terminator.
+  const tx = Math.cos(angle + Math.PI / 2);
+  const ty = Math.sin(angle + Math.PI / 2);
+  const grad = ctx.createLinearGradient(
+    x - tx * r * 0.15,
+    y - ty * r * 0.15,
+    x + tx * r * 0.15,
+    y + ty * r * 0.15
+  );
+  grad.addColorStop(0, "rgba(255, 220, 160, 0)");
+  grad.addColorStop(0.5, "rgba(255, 210, 140, 0.22)");
+  grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = Math.max(1.5, r * 0.12);
+  ctx.beginPath();
+  ctx.moveTo(x + tx * r, y + ty * r);
+  ctx.lineTo(x - tx * r, y - ty * r);
+  ctx.stroke();
+
+  // Tiny day-side rim cue.
+  ctx.strokeStyle = "rgba(255, 235, 180, 0.28)";
+  ctx.lineWidth = Math.max(1, r * 0.06);
+  ctx.beginPath();
+  ctx.arc(x, y, r - 0.5, angle - Math.PI / 2, angle + Math.PI / 2, false);
   ctx.stroke();
   ctx.restore();
 }
@@ -283,6 +347,9 @@ export function drawNamedBody(
     return;
   }
   DRAWERS[visual](ctx, x, y, radius);
+  if (options.lightToSun && (visual === "earth" || visual === "moon")) {
+    drawNightHemisphere(ctx, x, y, radius, options.lightToSun.x, options.lightToSun.y);
+  }
   drawSelectionRing(ctx, x, y, radius, Boolean(options.selected));
   drawLabel(ctx, x, y, radius, options.label, Boolean(options.selected));
 }
