@@ -31,7 +31,6 @@ import {
   NEAR_EARTH_VIEW_DEFAULT_KM,
   NEAR_EARTH_VIEW_MAX_KM,
   NEAR_EARTH_VIEW_MIN_KM,
-  NEAR_EARTH_WIDE_VIEW_KM,
   SCENARIOS,
   SCENARIO_OPTIONS,
   formatDistance
@@ -171,19 +170,15 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
       }
       setRunning(true);
     } else if (scenario === "near-earth") {
-      // Default: follow Earth so LEO–JWST stays on screen while Earth still orbits the Sun.
+      // Sun-centered stage: Earth visibly orbits; slider only opens the neighborhood.
       setViewHalfWidthKm(NEAR_EARTH_VIEW_DEFAULT_KM);
       sim.setViewHalfWidthKm(NEAR_EARTH_VIEW_DEFAULT_KM);
       sim.selectBody("earth");
       setSelected(sim.getSelectedInfo());
-      setFollowSelected(true);
-      const earth = sim.getSelectedBody();
-      if (earth) {
-        cameraRef.current = {
-          ...defaultCamera(CANVAS_W, CANVAS_H),
-          focus: { x: earth.position.x, y: earth.position.y }
-        };
-      }
+      setFollowSelected(false);
+      setCameraZoom(1);
+      cameraRef.current = defaultCamera(CANVAS_W, CANVAS_H);
+      setRunning(true);
     } else if (scenario === "historic-models") {
       setHistoricModel(DEFAULT_HISTORIC_MODEL);
       sim.setHistoricModel(DEFAULT_HISTORIC_MODEL);
@@ -224,26 +219,20 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
     if (scenario !== "near-earth") {
       return;
     }
-    // Wide: Sun-centered heliocentric portrait. Close: ride with Earth, Sun direction locked.
-    if (viewHalfWidthKm >= NEAR_EARTH_WIDE_VIEW_KM) {
-      setFollowSelected(false);
-      sim.selectBody("earth");
-      setSelected(sim.getSelectedInfo());
+    // Keep the default portrait Sun-centered so Earth keeps orbiting on screen.
+    if (!followSelected) {
       cameraRef.current = {
         ...defaultCamera(CANVAS_W, CANVAS_H),
-        zoom: cameraRef.current.zoom,
-        rotation: 0
+        zoom: cameraRef.current.zoom
       };
       return;
     }
-    if (followSelected) {
-      const body = sim.getSelectedBody();
-      if (body) {
-        cameraRef.current = {
-          ...cameraRef.current,
-          focus: { x: body.position.x, y: body.position.y }
-        };
-      }
+    const body = sim.getSelectedBody();
+    if (body) {
+      cameraRef.current = {
+        ...cameraRef.current,
+        focus: { x: body.position.x, y: body.position.y }
+      };
     }
   }, [viewHalfWidthKm, sim, scenario, followSelected]);
 
@@ -283,58 +272,31 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
         if (followRef.current && pitch.ball.flying) {
           cameraRef.current = {
             ...cameraRef.current,
-            rotation: 0,
             focus: { x: pitch.ball.position.x, y: pitch.ball.position.y }
           };
         } else {
           cameraRef.current = {
             ...cameraRef.current,
-            rotation: 0,
             focus: earthPitchCameraFocus(pitch, cameraRef.current.zoom)
           };
         }
       } else if (snapshot.scenario === "near-earth") {
         const sun = snapshot.bodies.find((b) => b.id === "sun");
-        const earth = snapshot.bodies.find((b) => b.id === "earth");
-        const wide = (snapshot.viewHalfWidthKm ?? 0) >= NEAR_EARTH_WIDE_VIEW_KM;
         const followBody = followRef.current ? selectedBody : null;
-        if (followBody && earth && sun && followBody.id !== "sun") {
-          // Ride with the selection, but lock orientation to the Sun–Earth line so the
-          // Sun stays a fixed direction (never looks like it orbits Earth).
-          const focus =
-            followBody.id === "earth" ? earth.position : followBody.position;
-          const sunAngle = Math.atan2(
-            earth.position.y - sun.position.y,
-            earth.position.x - sun.position.x
-          );
+        if (followBody) {
           cameraRef.current = {
             ...cameraRef.current,
-            focus: { x: focus.x, y: focus.y },
-            // Sun appears to the left of Earth in screen space.
-            rotation: -sunAngle + Math.PI
+            focus: { x: followBody.position.x, y: followBody.position.y }
           };
-        } else if (wide && sun) {
+        } else if (sun) {
           cameraRef.current = {
             ...cameraRef.current,
-            rotation: 0,
             focus: { x: sun.position.x, y: sun.position.y }
-          };
-        } else if (followBody?.id === "sun" && sun) {
-          cameraRef.current = {
-            ...cameraRef.current,
-            rotation: 0,
-            focus: { x: sun.position.x, y: sun.position.y }
-          };
-        } else {
-          cameraRef.current = {
-            ...cameraRef.current,
-            rotation: 0
           };
         }
       } else if (followRef.current && selectedBody) {
         cameraRef.current = {
           ...cameraRef.current,
-          rotation: 0,
           focus: { x: selectedBody.position.x, y: selectedBody.position.y }
         };
       }
@@ -462,23 +424,10 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
     }
     if (scenario === "near-earth") {
       setCameraZoom(1);
-      const wide = viewHalfWidthKm >= NEAR_EARTH_WIDE_VIEW_KM;
-      setFollowSelected(!wide);
-      if (!wide) {
-        sim.selectBody("earth");
-        setSelected(sim.getSelectedInfo());
-      }
-      const body = wide ? null : sim.getSelectedBody();
-      const sun = sim.getSnapshot().bodies.find((b) => b.id === "sun");
-      cameraRef.current = {
-        ...defaultCamera(CANVAS_W, CANVAS_H),
-        focus: body
-          ? { x: body.position.x, y: body.position.y }
-          : sun
-            ? { x: sun.position.x, y: sun.position.y }
-            : defaultCamera(CANVAS_W, CANVAS_H).focus,
-        rotation: 0
-      };
+      setFollowSelected(false);
+      sim.selectBody("earth");
+      setSelected(sim.getSelectedInfo());
+      cameraRef.current = defaultCamera(CANVAS_W, CANVAS_H);
       return;
     }
     setCameraZoom(1);
@@ -825,9 +774,9 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                     onChange={(event) => setViewHalfWidthKm(sliderToKm(Number(event.target.value)))}
                   />
                   <span className="gravity-distance-hints">
-                    Zoom from LEO out toward 1 AU. Earth always orbits the Sun (solar gravity never
-                    switches off). Far out, bodies shrink so the year orbit stays clear; close in,
-                    follow Earth with the Sun held in a fixed direction.
+                    Opens the neighborhood around Earth (ISS → Moon → JWST). The Sun stays on
+                    stage and Earth keeps orbiting it — the Earth–Sun gap is compressed when
+                    you zoom in so the year orbit remains visible.
                   </span>
                 </label>
               ) : null}

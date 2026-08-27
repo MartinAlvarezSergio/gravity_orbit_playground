@@ -1,4 +1,5 @@
 import { BodyVisualKind } from "./types";
+import { worldToScreen, type CameraView } from "./camera";
 
 type DrawBodyOptions = {
   selected?: boolean;
@@ -8,6 +9,8 @@ type DrawBodyOptions = {
    * near-Earth mode, paints a schematic night-side terminator (top-down orbital view).
    */
   lightToSun?: { x: number; y: number };
+  /** When set, labels are drawn upright in screen space (not spun by camera/world motion). */
+  camera?: CameraView;
 };
 
 function withShadow(
@@ -351,5 +354,19 @@ export function drawNamedBody(
     drawNightHemisphere(ctx, x, y, radius, options.lightToSun.x, options.lightToSun.y);
   }
   drawSelectionRing(ctx, x, y, radius, Boolean(options.selected));
+
+  if (!options.label) {
+    return;
+  }
+  // Keep text upright on screen even if the camera/world is transformed.
+  if (options.camera) {
+    const screen = worldToScreen(options.camera, { x, y });
+    const screenR = radius * options.camera.zoom;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    drawLabel(ctx, screen.x, screen.y, screenR, options.label, Boolean(options.selected));
+    ctx.restore();
+    return;
+  }
   drawLabel(ctx, x, y, radius, options.label, Boolean(options.selected));
 }

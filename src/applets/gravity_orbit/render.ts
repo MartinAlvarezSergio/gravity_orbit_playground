@@ -3,7 +3,7 @@ import { drawNamedBody } from "./bodyVisuals";
 import { renderEarthPitchWorld } from "./earthPitchRender";
 import type { HistoricGuide } from "./historicModels";
 import { historicModelMeta } from "./historicModels";
-import { formatDistance } from "./scenarios";
+import { AU_KM, formatDistance } from "./scenarios";
 import { GravitySnapshot, NamedBody } from "./types";
 
 type RenderOptions = {
@@ -321,13 +321,12 @@ function visibleScenarioBodies(snapshot: GravitySnapshot, _camera: CameraView): 
   if (snapshot.scenario !== "near-earth") {
     return snapshot.bodies;
   }
-  // At AU-wide scales, Moon/ISS/JWST sit on top of Earth in pixels — hide them so
-  // the heliocentric Earth orbit stays readable. Sun + Earth always remain.
+  // Hide craft that still collapse onto Earth even with dual-scale mapping.
   return snapshot.bodies.filter((body) => {
     if (body.id === "sun" || body.id === "earth") {
       return true;
     }
-    return body.orbitRadiusPx >= 3.5;
+    return body.orbitRadiusPx >= 2.8;
   });
 }
 
@@ -377,18 +376,17 @@ function drawSunDirectionHint(
 
   drawArrow(ctx, x0, y0, x1 - x0, y1 - y0, "rgba(255, 210, 110, 0.95)");
 
+  const tip = worldToScreen(camera, { x: x1, y: y1 });
   ctx.save();
-  const labelX = x1 + ux * (10 / camera.zoom);
-  const labelY = y1 + uy * (10 / camera.zoom);
-  const fontPx = Math.max(10, 12 / camera.zoom);
-  ctx.font = `700 ${fontPx}px system-ui, sans-serif`;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.font = "700 12px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.lineWidth = Math.max(2.5, 3.2 / camera.zoom);
+  ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
   ctx.fillStyle = "rgba(255, 230, 150, 1)";
-  ctx.strokeText("Sun", labelX, labelY);
-  ctx.fillText("Sun", labelX, labelY);
+  ctx.strokeText("Sun", tip.x, tip.y - 14);
+  ctx.fillText("Sun", tip.x, tip.y - 14);
   ctx.restore();
 }
 
@@ -453,7 +451,8 @@ function drawScenarioBodies(
     drawNamedBody(ctx, body.visual, body.position.x, body.position.y, body.drawRadius, {
       selected: snapshot.selectedBodyId === body.id,
       label: body.drawRadius >= 3.2 ? body.shortLabel : undefined,
-      lightToSun
+      lightToSun,
+      camera: options.camera
     });
   }
 }
@@ -472,7 +471,10 @@ function drawHud(
 
   const bits: string[] = [];
   if (snapshot.scenario === "near-earth" && snapshot.viewHalfWidthKm != null) {
-    bits.push(`View half-width ≈ ${formatDistance(snapshot.viewHalfWidthKm, "km")}`);
+    bits.push(`Neighborhood half-width ≈ ${formatDistance(snapshot.viewHalfWidthKm, "km")}`);
+    if (snapshot.viewHalfWidthKm < AU_KM * 0.85) {
+      bits.push("Earth–Sun gap compressed");
+    }
   }
   if (snapshot.scenario === "historic-models" && snapshot.historicModel) {
     const meta = historicModelMeta(snapshot.historicModel);

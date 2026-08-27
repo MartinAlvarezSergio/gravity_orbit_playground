@@ -140,7 +140,7 @@ export const NEAR_EARTH_BODIES: ScenarioBodyDef[] = [
     name: "Sun",
     shortLabel: "Sun",
     description:
-      "Always the center of this map. Earth goes around it once per year. Zoomed in near Earth, the Sun may sit off-screen — an arrow still points toward it.",
+      "Always the center of this map and always on screen. Earth goes around it once per year — even when the distance slider is zoomed in on nearby space (the AU gap is compressed for clarity).",
     visual: "sun",
     isCenter: true,
     distance: 0,
@@ -152,7 +152,7 @@ export const NEAR_EARTH_BODIES: ScenarioBodyDef[] = [
     name: "Earth",
     shortLabel: "Earth",
     description:
-      "Always orbiting the Sun at about 1 AU. Follow Earth and tighten the view to watch the ISS, Moon, and JWST move around it.",
+      "Always orbiting the Sun. Tighten the distance slider to expand ISS / Moon / JWST around Earth; the Sun stays in the picture.",
     visual: "earth",
     isCenter: false,
     distance: 1.496e8,
@@ -219,9 +219,9 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
     id: "near-earth",
     title: "Earth, Moon, and nearby space",
     summary:
-      "Earth always orbits the Sun under solar gravity; ISS, Moon, and JWST ride along. Zoom from LEO out to ~1 AU — the Sun never drops out of the model.",
+      "Sun always on stage; Earth always orbits it. The distance slider opens the Earth neighborhood (ISS → Moon → JWST) without removing the Sun.",
     note:
-      "Heliocentric at every zoom: Earth keeps its yearly orbit and everything shares the Sunward pull. Up close, the camera can ride with Earth while locking the Sun’s direction (so the Sun does not appear to orbit Earth). Zoomed out, body sizes shrink so the orbit stays readable; craft that collapse onto Earth at AU scales are hidden. Distances are schematic.",
+      "Illustrative dual scale: the Earth–Sun year orbit stays on-screen at every slider setting (1 AU is compressed when you zoom in on nearby space). Moon / ISS / JWST use the slider scale around Earth and keep the Sunward pull. Body sizes shrink at wide views. Not a single linear map of the whole Solar System.",
     distanceUnit: "km",
     bodies: NEAR_EARTH_BODIES
   },

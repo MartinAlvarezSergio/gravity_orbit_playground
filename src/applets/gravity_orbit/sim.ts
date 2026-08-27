@@ -242,6 +242,35 @@ function kmToOrbitPx(km: number, viewHalfWidthKm: number): number {
   return (km / viewHalfWidthKm) * maxOrbitPx;
 }
 
+/**
+ * Earth–Sun chord for the near-Earth map.
+ * True AU/view scaling blows the Sun off-screen when studying LEO/Moon; we therefore
+ * keep the year orbit on-canvas at every slider setting (compressed when zoomed in,
+ * true-ish when the view is wide enough to fit 1 AU).
+ */
+function earthSunOrbitPx(viewHalfWidthKm: number): number {
+  const minDim = Math.min(LOGICAL_WIDTH, LOGICAL_HEIGHT);
+  const maxOrbitPx = minDim * 0.42;
+  const truePx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
+  // Always visible year orbit; never larger than the usual outer guide.
+  return clamp(truePx, minDim * 0.32, maxOrbitPx);
+}
+
+/** Local (Earth-relative) radius; capped so Moon/JWST stay beside Earth when AU is compressed. */
+function nearEarthLocalOrbitPx(
+  km: number,
+  viewHalfWidthKm: number,
+  earthSunPx: number
+): number {
+  const raw = kmToOrbitPx(km, viewHalfWidthKm);
+  const cap = earthSunPx * 0.62;
+  if (raw <= cap) {
+    return raw;
+  }
+  // Soft shoulder so LEO can still open up without swallowing the Sun–Earth gap.
+  return cap + (raw - cap) / (1 + (raw - cap) / (cap * 0.85));
+}
+
 function nearEarthOmega(bodyId: string, periodDays: number): number {
   if (periodDays <= 0) {
     return 0;
@@ -292,12 +321,13 @@ function buildNearEarthBodies(center: Vec2, viewHalfWidthKm: number): NamedBody[
       omega = 0;
       distanceValue = 0;
     } else if (body.id === "earth") {
-      orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
+      orbitRadiusPx = earthSunOrbitPx(viewHalfWidthKm);
       angle = earthAngle;
       omega = nearEarthOmega("earth", 365.25);
       distanceValue = AU_KM;
     } else if (body.id === "moon" || body.id === "iss" || body.id === "jwst") {
-      orbitRadiusPx = kmToOrbitPx(body.distance, viewHalfWidthKm);
+      const earthR = earthSunOrbitPx(viewHalfWidthKm);
+      orbitRadiusPx = nearEarthLocalOrbitPx(body.distance, viewHalfWidthKm, earthR);
       angle = body.id === "moon" ? moonAngle : body.id === "iss" ? issAngle : jwstAngle;
       omega = nearEarthOmega(body.id, body.periodDays);
     }
@@ -336,7 +366,7 @@ function bodyById(bodies: NamedBody[], id: string): NamedBody | undefined {
   return bodies.find((b) => b.id === id);
 }
 
-/** Always heliocentric: Sun fixed at center; Earth orbits Sun; craft relative to Earth. */
+/** Always heliocentric: Sun fixed on-canvas; Earth orbits it; craft ride with Earth. */
 function placeNearEarthBodies(
   bodies: NamedBody[],
   center: Vec2,
@@ -348,6 +378,8 @@ function placeNearEarthBodies(
     return;
   }
 
+  const earthSunPx = earthSunOrbitPx(viewHalfWidthKm);
+
   sun.isCenter = true;
   sun.orbitRadiusPx = 0;
   sun.omega = 0;
@@ -358,7 +390,7 @@ function placeNearEarthBodies(
   sun.acceleration = { x: 0, y: 0 };
 
   earth.isCenter = false;
-  earth.orbitRadiusPx = kmToOrbitPx(AU_KM, viewHalfWidthKm);
+  earth.orbitRadiusPx = earthSunPx;
   earth.distanceValue = AU_KM;
   earth.omega = nearEarthOmega("earth", 365.25);
   earth.drawRadius = nearEarthDrawRadius("earth", viewHalfWidthKm);
@@ -384,7 +416,7 @@ function placeNearEarthBodies(
     body.isCenter = false;
     const catalogKm = NEAR_EARTH_BODIES_DIST[body.id] ?? body.distanceValue;
     body.distanceValue = catalogKm;
-    body.orbitRadiusPx = kmToOrbitPx(catalogKm, viewHalfWidthKm);
+    body.orbitRadiusPx = nearEarthLocalOrbitPx(catalogKm, viewHalfWidthKm, earthSunPx);
     body.drawRadius = nearEarthDrawRadius(body.id, viewHalfWidthKm);
     if (body.id === "jwst") {
       // Stay near anti-Sun (Sun–Earth L2 direction).
