@@ -271,24 +271,21 @@ function nearEarthLocalOrbitPx(
   return cap + (raw - cap) / (1 + (raw - cap) / (cap * 0.85));
 }
 
+/** Near-Earth Earth year duration (wall-clock seconds at 1× time scale). */
+const NEAR_EARTH_YEAR_SIM_SECONDS = EARTH_YEAR_SIM_SECONDS * 2;
+
 function nearEarthOmega(bodyId: string, periodDays: number): number {
   if (periodDays <= 0) {
     return 0;
   }
-  // Map physical period into a readable band: ISS ~8 s/orbit, Moon ~40 s, Earth year ~48 s.
+  // ISS stays exaggerated so LEO motion stays visible next to the Moon.
   if (bodyId === "iss") {
     return (Math.PI * 2) / 8;
   }
-  if (bodyId === "moon") {
-    return (Math.PI * 2) / 40;
-  }
-  if (bodyId === "jwst") {
-    return (Math.PI * 2) / 90;
-  }
-  if (bodyId === "earth") {
-    return (Math.PI * 2) / (EARTH_YEAR_SIM_SECONDS * 2);
-  }
-  return omegaFromPeriodDays(periodDays);
+  // Earth, Moon, etc.: keep true period ratios vs a shared schematic year
+  // (Moon ≈ 365.25/27.32 ≈ 13.4 orbits per year).
+  const periodSimSeconds = (periodDays / 365.25) * NEAR_EARTH_YEAR_SIM_SECONDS;
+  return (Math.PI * 2) / Math.max(periodSimSeconds, 1e-6);
 }
 
 const NEAR_EARTH_BODIES_DIST: Record<string, number> = {
