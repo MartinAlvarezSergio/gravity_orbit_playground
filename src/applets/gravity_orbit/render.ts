@@ -1,3 +1,4 @@
+import { setLogicalTransform } from "../../core/canvasScale";
 import { applyCameraTransform, worldToScreen, type CameraView } from "./camera";
 import { drawNamedBody } from "./bodyVisuals";
 import { renderEarthPitchWorld } from "./earthPitchRender";
@@ -13,6 +14,8 @@ type RenderOptions = {
   showTrails: boolean;
   showSweptArea: boolean;
   camera: CameraView;
+  /** Bottom-edge text strip (status bits and arrow legend). Default true. */
+  showHud?: boolean;
 };
 
 type CanvasPalette = {
@@ -673,7 +676,8 @@ function drawSunDirectionHint(
 
   const tip = worldToScreen(camera, { x: x1, y: y1 });
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Screen space in logical units (the backing store may be at device resolution).
+  setLogicalTransform(ctx, camera.width);
   ctx.font = "700 12px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -761,7 +765,7 @@ function drawHud(
 ): void {
   const palette = canvasPalette(options.theme);
   ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  setLogicalTransform(ctx, snapshot.width);
   ctx.font = "500 12px system-ui, sans-serif";
   ctx.fillStyle = palette.hud;
   ctx.textAlign = "left";
@@ -825,7 +829,7 @@ export function renderGravityOrbit(
 ): void {
   const { width, height } = snapshot;
   const palette = canvasPalette(options.theme);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  setLogicalTransform(ctx, width);
   ctx.clearRect(0, 0, width, height);
 
   const background = ctx.createLinearGradient(0, 0, 0, height);
@@ -873,5 +877,7 @@ export function renderGravityOrbit(
   }
   ctx.restore();
 
-  drawHud(ctx, snapshot, options);
+  if (options.showHud ?? true) {
+    drawHud(ctx, snapshot, options);
+  }
 }

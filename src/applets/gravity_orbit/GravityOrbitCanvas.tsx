@@ -1,7 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { logicalPointer, setLogicalTransform } from "../../core/canvasScale";
 import { AppletHostAdapter } from "../../core/host";
-import { ControlCard } from "../../ui/ControlCard";
+import { AppletStage } from "../../ui/stage/AppletStage";
+import {
+  StageDivider,
+  StageHero,
+  StageIconButton,
+  StagePillButton,
+  StagePills,
+  StageReadout,
+  StageSection,
+  StageSelect,
+  StageSlider,
+  StageToggle
+} from "../../ui/stage/StageControls";
+import "./gravityStage.css";
 import {
   clampZoom,
   defaultCamera,
@@ -107,9 +121,55 @@ function nearEarthViewForBody(bodyId: string, distanceKm: number): number {
   return clampNearEarthViewForBody(distanceKm);
 }
 
+/** Pitch speed without the unit, for the large readout (the label carries "× v_circ"). */
+function pitchSpeedNumber(fraction: number): string {
+  return formatPitchSpeedFraction(fraction).replace(/\s*×\s*v_circ$/, "×");
+}
+
+const TIP = {
+  scenario: "What do you want to explore?",
+  play: "Start / Run the motion, or pause and resume it.",
+  throwBall: "Throw the ball again from the pitcher at the current pitch speed.",
+  next: "Next pitch preset",
+  reset: "Restart the motion from its starting positions and reset the camera.",
+  popOut: "Open the live controls in a movable window",
+  dock: "Return the controls to this page",
+  centralMass: "Mass of the central “star”. Drag the star on the canvas to move it.",
+  particles: "Number of particles orbiting the central mass.",
+  selfGravity: "Particle–particle gravity (softened). Off: each particle feels only the central mass.",
+  pitchSpeed:
+    "Launch speed as a multiple of circular-orbit speed (v_circ).\nHandy markers: hard throw ≈ 0.05× · circular 1.00× · escape ≈ 1.41×",
+  timeScale: "How fast simulated time runs.",
+  pitchZoom: "Zoom in for a flat “local” horizon; zoom out to see Earth as a globe again.",
+  cameraZoom: "Magnify the view around the camera’s focus.",
+  followBall: "Keep the camera on the ball while it flies.",
+  resetCamera: "Return to the starting view.",
+  massA: "Mass of planet A, in relative units.",
+  massB: "Mass of planet B, in relative units.",
+  eccentricity:
+    "0 is circular · higher values make a more elongated orbit and a stronger closest-approach speed-up",
+  nearEarthView:
+    "Opens the neighborhood around Earth (ISS → Moon → JWST). The Sun stays on stage and Earth keeps orbiting it — the Earth–Sun gap is compressed when you zoom in so the year orbit remains visible.",
+  followSelected: "The camera tracks the selected body as it moves.",
+  zoomFollow: "Zoom in on the selected body and keep the camera on it.",
+  noSelection: "Click a body (or a chip under Bodies) to select it, then try Follow or Zoom & follow.",
+  trails: "Draw each body’s recent path.",
+  velocity: "Green arrows: velocity of each moving body.",
+  force: "Orange arrows: gravitational pull on each moving body.",
+  forceHistoric: "Orange arrows: gravitational pull. Historic models are kinematic, so they show none.",
+  regime: "What this launch speed does: falls back, circles, stays bound on an ellipse, or escapes.",
+  semimajorA: "Size of A’s ellipse around the barycenter, as a share of the relative semimajor axis.",
+  semimajorB: "Size of B’s ellipse around the barycenter, as a share of the relative semimajor axis.",
+  separationNow: "Current A–B distance, as a share of the semimajor axis.",
+  separationRange: "Closest-to-farthest separation over one orbit, as a share of the semimajor axis.",
+  barycenter: "Fixed at the shared focus of both ellipses.",
+  avgSpeed: "Mean particle speed (simulation units).",
+  kineticEnergy: "Total kinetic energy of the particles (simulation units).",
+  gapCompressed: "1 AU is drawn shorter than the slider scale so Earth’s year orbit stays on screen."
+} as const;
+
 export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const canvasShellRef = useRef<HTMLDivElement | null>(null);
   const controlsPopupRef = useRef<Window | null>(null);
   const controlsPopupCleanupRef = useRef<(() => void) | null>(null);
   const dragRef = useRef(false);
@@ -142,7 +202,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
   const [selected, setSelected] = useState<SelectedBodyInfo | null>(null);
   const [scenarioNote, setScenarioNote] = useState(SCENARIOS["solar-system"].note);
   const [historicModel, setHistoricModel] = useState<HistoricModelId>(DEFAULT_HISTORIC_MODEL);
-  const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false);
+  const [ballFlying, setBallFlying] = useState(true);
   const [controlsPortalTarget, setControlsPortalTarget] = useState<HTMLElement | null>(null);
   const [displayNotice, setDisplayNotice] = useState("");
   const [canvasTheme, setCanvasTheme] = useState<GravityCanvasTheme>(currentCanvasTheme);
@@ -170,15 +230,6 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
       attributeFilter: ["data-theme"]
     });
     return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    function onFullscreenChange(): void {
-      setIsCanvasFullscreen(document.fullscreenElement === canvasShellRef.current);
-    }
-
-    document.addEventListener("fullscreenchange", onFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
 
   useEffect(
@@ -369,16 +420,23 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
         };
       }
 
+      // The backing store is at device resolution; draw in the logical 900 × 620 units.
+      setLogicalTransform(ctx, CANVAS_W);
       renderGravityOrbit(ctx, snapshot, {
         theme: canvasTheme,
         showTrails,
         showVelocityVectors,
         showForceVectors,
         showSweptArea,
-        camera: cameraRef.current
+        camera: cameraRef.current,
+        // The stage readouts carry the HUD's numbers; its arrow key is in the info panel.
+        showHud: false
       });
       setAvgSpeed(snapshot.averageSpeed);
       setKineticEnergy(snapshot.totalKineticEnergy);
+      if (snapshot.earthPitch) {
+        setBallFlying(snapshot.earthPitch.ball.flying);
+      }
       if (snapshot.scenario !== "earth-pitch") {
         setSelected(sim.getSelectedInfo());
       }
@@ -414,10 +472,7 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
     const el = canvas;
 
     function canvasPoint(event: PointerEvent): { x: number; y: number } {
-      const rect = el.getBoundingClientRect();
-      const x = ((event.clientX - rect.left) / rect.width) * el.width;
-      const y = ((event.clientY - rect.top) / rect.height) * el.height;
-      return { x, y };
+      return logicalPointer(event, el, CANVAS_W, CANVAS_H);
     }
 
     function onPointerDown(event: PointerEvent): void {
@@ -597,24 +652,6 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
     setPaused((v) => !v);
   }
 
-  async function toggleCanvasFullscreen(): Promise<void> {
-    const shell = canvasShellRef.current;
-    if (!shell) {
-      return;
-    }
-
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-      } else {
-        await shell.requestFullscreen();
-      }
-      setDisplayNotice("");
-    } catch {
-      setDisplayNotice("Fullscreen could not be opened in this browser.");
-    }
-  }
-
   function dockControls(): void {
     const popup = controlsPopupRef.current;
     controlsPopupCleanupRef.current?.();
@@ -719,650 +756,509 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
   const historicMeta =
     HISTORIC_MODEL_OPTIONS.find((m) => m.id === historicModel) ?? HISTORIC_MODEL_OPTIONS[0];
 
-  const overlayControls = (
-    <div className="gravity-canvas-toolbar" role="toolbar" aria-label="Playback and display controls">
-      <button type="button" onClick={onStart}>
-        Start
-      </button>
-      <button type="button" onClick={onThrow}>
-        {isEarthPitch ? "Throw" : "Run"}
-      </button>
-      <button type="button" onClick={onPauseToggle}>
-        {running && !paused ? "Pause" : "Resume"}
-      </button>
-      <button type="button" onClick={onNextPreset} disabled={!isEarthPitch} title="Next pitch preset">
-        Next
-      </button>
-      <button type="button" onClick={onReset}>
-        Reset
-      </button>
-      <span className="gravity-toolbar-divider" aria-hidden="true" />
-      <button
-        type="button"
-        className="gravity-display-button"
-        onClick={() => void toggleCanvasFullscreen()}
-        aria-label={isCanvasFullscreen ? "Exit full screen motion display" : "Maximise motion display"}
-        title={isCanvasFullscreen ? "Exit full screen" : "Make the motion display full screen"}
-      >
-        <span aria-hidden="true">{isCanvasFullscreen ? "↙" : "⛶"}</span>{" "}
-        {isCanvasFullscreen ? "Exit" : "Maximise"}
-      </button>
-      <button
-        type="button"
-        className="gravity-display-button"
-        onClick={controlsPortalTarget ? dockControls : openControlsPopup}
-        title={
-          controlsPortalTarget
-            ? "Return the controls to this page"
-            : "Open the live controls in a movable window"
-        }
-      >
-        <span aria-hidden="true">{controlsPortalTarget ? "↩" : "↗"}</span>{" "}
-        {controlsPortalTarget ? "Dock controls" : "Pop out controls"}
-      </button>
-    </div>
+  const moving = running && !paused;
+  const playLabel = !running ? "Start" : paused ? "Resume" : "Pause";
+  const onPlay = running ? onPauseToggle : onStart;
+  const popped = controlsPortalTarget !== null;
+  const lightSurface = canvasTheme === "light";
+  const pct = (value: number, digits: number): string => `${(value * 100).toFixed(digits)}%`;
+  const binaryShare = (px: number): number => (binarySnapshot ? px / binarySnapshot.separationPx : 0);
+  const sweptPercent = binarySnapshot ? (binarySnapshot.sweepPeriodFraction * 100).toFixed(0) : "10";
+  const historicHint = `${historicMeta.bizarreHook} ${historicMeta.summary} Leave trails on; in Ptolemy, keep Mars selected to watch the epicycle loops.`;
+  const keplerHint = `Each shaded wedge spans the previous ${sweptPercent}% of a period. Its shape changes around the ellipse, but its swept area stays constant.`;
+  const gapCompressed = isNearEarth && viewHalfWidthKm < AU_KM * 0.85;
+  const selectedBody = isBinary && selected ? sim.getSelectedBody() : null;
+  const bodyChips: { id: string; shortLabel: string; name: string }[] = !isNamedOrbit
+    ? []
+    : scenario === "solar-system"
+      ? SCENARIOS["solar-system"].bodies
+      : scenario === "near-earth"
+        ? SCENARIOS["near-earth"].bodies
+        : sim.getSnapshot().bodies.map((b) => ({ id: b.id, shortLabel: b.shortLabel, name: b.name }));
+
+  /** Scenario switch and transport: the stage top bar, repeated in the pop-out window. */
+  const transport = (
+    <>
+      <StageSelect
+        ariaLabel="Orbital scenario"
+        tip={`${TIP.scenario}\n${scenarioMeta.summary}`}
+        value={scenario}
+        options={SCENARIO_OPTIONS.map((opt) => ({ value: opt.id, label: opt.label }))}
+        onChange={setScenario}
+      />
+      <StageDivider />
+      <StageIconButton icon={moving ? "pause" : "play"} label={playLabel} tip={TIP.play} onClick={onPlay} />
+      {isEarthPitch ? (
+        <>
+          <StagePillButton label="Throw" tip={TIP.throwBall} onClick={onThrow} />
+          <StageIconButton icon="step" label="Next" tip={TIP.next} onClick={onNextPreset} />
+        </>
+      ) : null}
+      <StageIconButton icon="reset" label="Reset" tip={TIP.reset} onClick={onReset} />
+    </>
   );
 
-  const controlsPanel = (
-      <ControlCard title="Gravity Orbits & The Solar System" subtitle={scenarioMeta.summary}>
-        <div className="control-grid">
-          <label className="control-span-2">
-            What do you want to explore?
-            <select
-              value={scenario}
-              onChange={(event) => setScenario(event.target.value as ScenarioId)}
-              aria-label="Orbital scenario"
-            >
-              {SCENARIO_OPTIONS.map((opt) => (
-                <option key={opt.id} value={opt.id}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </label>
+  const toolbar = (
+    <>
+      {transport}
+      <StageDivider />
+      <StageIconButton
+        icon="popout"
+        label={popped ? "Dock controls" : "Pop out controls"}
+        tip={popped ? TIP.dock : TIP.popOut}
+        pressed={popped}
+        onClick={popped ? dockControls : openControlsPopup}
+      />
+    </>
+  );
 
-          <p className="gravity-scenario-note control-span-2">{scenarioNote}</p>
+  const displayToggles = (
+    <StageSection title="Display">
+      <div className="stage-pills gravity-long-pills">
+        <StageToggle label="Show trails" on={showTrails} tip={TIP.trails} onChange={setShowTrails} />
+        <StageToggle
+          label="Show velocity (green)"
+          on={showVelocityVectors}
+          tip={TIP.velocity}
+          onChange={setShowVelocityVectors}
+        />
+        <StageToggle
+          label="Show gravitational pull (orange)"
+          on={showForceVectors}
+          tip={isHistoric ? TIP.forceHistoric : TIP.force}
+          onChange={setShowForceVectors}
+        />
+      </div>
+    </StageSection>
+  );
 
-          {isPlayground ? (
-            <>
-              <label className="control-span-2">
-                <span className="slider-label">
-                  <span>Central mass</span>
-                  <strong>{Math.round(centralMass)}</strong>
-                </span>
-                <input
-                  type="range"
-                  min={MASS_MIN}
-                  max={MASS_MAX}
-                  value={centralMass}
-                  onChange={(event) => setCentralMass(Number(event.target.value))}
+  const controls = (
+    <>
+      {displayNotice ? (
+        <p className="gravity-notice" role="status">
+          {displayNotice}
+        </p>
+      ) : null}
+
+      {isPlayground ? (
+        <>
+          <StageSlider
+            label="Central mass"
+            display={String(Math.round(centralMass))}
+            value={centralMass}
+            min={MASS_MIN}
+            max={MASS_MAX}
+            step={1}
+            tip={TIP.centralMass}
+            onChange={setCentralMass}
+          />
+          <StageSlider
+            label="Number of particles"
+            display={String(Math.round(particleCount))}
+            value={particleCount}
+            min={PARTICLE_MIN}
+            max={PARTICLE_MAX}
+            step={5}
+            tip={TIP.particles}
+            onChange={setParticleCount}
+          />
+          <div className="stage-pills gravity-long-pills">
+            <StageToggle
+              label="Let particles attract each other"
+              on={selfGravity}
+              tip={TIP.selfGravity}
+              onChange={setSelfGravity}
+            />
+          </div>
+        </>
+      ) : null}
+
+      {isEarthPitch ? (
+        <>
+          <StageSlider
+            label="Pitch speed"
+            display={formatPitchSpeedFraction(pitchSpeed)}
+            value={pitchSpeed}
+            min={PITCH_SPEED_MIN}
+            max={PITCH_SPEED_MAX}
+            step={0.005}
+            tip={TIP.pitchSpeed}
+            onChange={onPitchSpeedChange}
+          />
+          <div className="stage-pills stage-presets gravity-long-pills" role="group" aria-label="Pitch presets">
+            {PITCH_PRESETS.map((preset) => (
+              <StageToggle
+                key={preset.id}
+                label={preset.label}
+                tip={preset.blurb}
+                on={Math.abs(pitchSpeed - preset.speedFraction) < 0.02}
+                onChange={() => applyPitchPreset(preset.id)}
+              />
+            ))}
+          </div>
+          <StageSlider
+            label="Time scale"
+            display={`${timeScale.toFixed(1)}×`}
+            value={timeScale}
+            min={0.2}
+            max={4}
+            step={0.1}
+            tip={TIP.timeScale}
+            onChange={setTimeScale}
+          />
+          <StageSection title="Camera">
+            <StageSlider
+              label="Camera zoom"
+              display={`${cameraZoom.toFixed(1)}×`}
+              value={cameraZoom}
+              min={1}
+              max={PITCH_MAX_ZOOM}
+              step={0.5}
+              tip={TIP.pitchZoom}
+              onChange={(value) => setCameraZoom(clampZoom(value, PITCH_MAX_ZOOM))}
+            />
+            <StagePills>
+              <StageToggle
+                label="Follow the baseball"
+                on={followSelected}
+                tip={TIP.followBall}
+                onChange={setFollowSelected}
+              />
+              <StagePillButton label="Reset camera" tip={TIP.resetCamera} onClick={resetCamera} />
+            </StagePills>
+          </StageSection>
+        </>
+      ) : null}
+
+      {isNamedOrbit ? (
+        <>
+          {isBinary ? (
+            <StageSection title="Two bodies">
+              <StageSlider
+                label="Planet A mass"
+                display={`${binaryBodyAMass.toFixed(1)} relative units`}
+                value={binaryBodyAMass}
+                min={BINARY_MASS_MIN}
+                max={BINARY_MASS_MAX}
+                step={BINARY_MASS_STEP}
+                tip={TIP.massA}
+                onChange={setBinaryBodyAMass}
+              />
+              <StageSlider
+                label="Planet B mass"
+                display={`${binaryBodyBMass.toFixed(1)} relative units`}
+                value={binaryBodyBMass}
+                min={BINARY_MASS_MIN}
+                max={BINARY_MASS_MAX}
+                step={BINARY_MASS_STEP}
+                tip={TIP.massB}
+                onChange={setBinaryBodyBMass}
+              />
+              <StageSlider
+                label="Orbital eccentricity"
+                display={binaryEccentricity.toFixed(2)}
+                value={binaryEccentricity}
+                min={BINARY_ECCENTRICITY_MIN}
+                max={BINARY_ECCENTRICITY_MAX}
+                step={BINARY_ECCENTRICITY_STEP}
+                tip={TIP.eccentricity}
+                onChange={setBinaryEccentricity}
+              />
+              <div className="stage-pills gravity-long-pills">
+                <StageToggle
+                  label="Kepler’s 2nd law · show equal-time area"
+                  on={showSweptArea}
+                  tip={keplerHint}
+                  onChange={setShowSweptArea}
                 />
-              </label>
-
-              <label className="control-span-2">
-                <span className="slider-label">
-                  <span>Number of particles</span>
-                  <strong>{Math.round(particleCount)}</strong>
-                </span>
-                <input
-                  type="range"
-                  min={PARTICLE_MIN}
-                  max={PARTICLE_MAX}
-                  step={5}
-                  value={particleCount}
-                  onChange={(event) => setParticleCount(Number(event.target.value))}
-                />
-              </label>
-
-              <label className="checkbox control-span-2">
-                <input
-                  type="checkbox"
-                  checked={selfGravity}
-                  onChange={(event) => setSelfGravity(event.target.checked)}
-                />
-                Let particles attract each other
-              </label>
-            </>
+              </div>
+            </StageSection>
           ) : null}
 
-          {isEarthPitch ? (
-            <>
-              <div className="gravity-selection control-span-2">
-                <div className="gravity-selection-title">Newton’s pitch</div>
-                <div className="gravity-selection-meta">
-                  <span>
-                    Regime: <strong>{pitchRegimeLabel(pitchRegime)}</strong>
-                  </span>
-                  <span>
-                    Speed: <strong>{formatPitchSpeedFraction(pitchSpeed)}</strong>
-                  </span>
-                </div>
-                <p>
-                  Start zoomed in with a hard throw: the ground looks flat and the ball falls.
-                  Zoom out to see the globe, then raise the speed toward circular (~1×) and escape
-                  (~1.41×).
-                </p>
-              </div>
+          {isHistoric ? (
+            <StageSelect
+              label="Historical model"
+              ariaLabel="Historical Solar System model"
+              tip={historicHint}
+              value={historicModel}
+              options={HISTORIC_MODEL_OPTIONS.map((opt) => ({
+                value: opt.id,
+                label: `${opt.label} (${opt.yearHint})`
+              }))}
+              onChange={setHistoricModel}
+            />
+          ) : null}
 
-              <label className="control-span-2">
-                <span className="slider-label">
-                  <span>Pitch speed</span>
-                  <strong>{formatPitchSpeedFraction(pitchSpeed)}</strong>
-                </span>
-                <input
-                  type="range"
-                  min={PITCH_SPEED_MIN}
-                  max={PITCH_SPEED_MAX}
-                  step={0.005}
-                  value={pitchSpeed}
-                  onChange={(event) => onPitchSpeedChange(Number(event.target.value))}
-                />
-                <span className="gravity-distance-hints">
-                  Handy markers: hard throw ≈ 0.05× · circular 1.00× · escape ≈ 1.41×
-                </span>
-              </label>
+          <StageSlider
+            label="Time scale"
+            display={`${timeScale.toFixed(1)}×`}
+            value={timeScale}
+            min={0.2}
+            max={8}
+            step={0.1}
+            tip={TIP.timeScale}
+            onChange={setTimeScale}
+          />
 
-              <div className="gravity-pitch-presets control-span-2" role="group" aria-label="Pitch presets">
-                {PITCH_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    title={preset.blurb}
-                    className={
-                      Math.abs(pitchSpeed - preset.speedFraction) < 0.02
-                        ? "gravity-pitch-preset is-selected"
-                        : "gravity-pitch-preset"
-                    }
-                    onClick={() => applyPitchPreset(preset.id)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-
-              <label className="control-span-2">
-                <span className="slider-label">
-                  <span>Time scale</span>
-                  <strong>{timeScale.toFixed(1)}×</strong>
-                </span>
-                <input
-                  type="range"
-                  min={0.2}
-                  max={4}
-                  step={0.1}
-                  value={timeScale}
-                  onChange={(event) => setTimeScale(Number(event.target.value))}
-                />
-              </label>
-
-              <label className="control-span-2">
-                <span className="slider-label">
-                  <span>Camera zoom</span>
-                  <strong>{cameraZoom.toFixed(1)}×</strong>
-                </span>
-                <input
-                  type="range"
-                  min={1}
-                  max={PITCH_MAX_ZOOM}
-                  step={0.5}
-                  value={cameraZoom}
-                  onChange={(event) =>
-                    setCameraZoom(clampZoom(Number(event.target.value), PITCH_MAX_ZOOM))
+          <StageSection title="Camera">
+            {isNearEarth ? (
+              <StageSlider
+                label="How much space is in view?"
+                display={formatDistance(viewHalfWidthKm, "km")}
+                value={kmToSlider(viewHalfWidthKm)}
+                min={0}
+                max={100}
+                step={0.1}
+                tip={TIP.nearEarthView}
+                onChange={(value) => setViewHalfWidthKm(sliderToKm(value))}
+              />
+            ) : null}
+            <StageSlider
+              label="Camera zoom"
+              display={`${cameraZoom.toFixed(1)}×`}
+              value={cameraZoom}
+              min={1}
+              max={12}
+              step={0.1}
+              tip={TIP.cameraZoom}
+              onChange={(value) => setCameraZoom(clampZoom(value, 16))}
+            />
+            <div className="stage-pills gravity-long-pills">
+              <StageToggle
+                label="Keep the camera on the selected body"
+                on={followSelected}
+                tip={TIP.followSelected}
+                onChange={(next) => {
+                  setFollowSelected(next);
+                  if (next) {
+                    focusOnSelected({ enableFollow: true });
                   }
-                />
-                <span className="gravity-distance-hints">
-                  Zoom in for a flat “local” horizon; zoom out to see Earth as a globe again.
-                </span>
-              </label>
+                }}
+              />
+            </div>
+            <div className="stage-pills gravity-pill-pair">
+              <StagePillButton
+                label="Zoom & follow"
+                tip={TIP.zoomFollow}
+                disabled={!selected}
+                onClick={() => focusOnSelected({ zoomIn: true, enableFollow: true })}
+              />
+              <StagePillButton label="Reset camera" tip={TIP.resetCamera} onClick={resetCamera} />
+            </div>
+          </StageSection>
 
-              <label className="checkbox control-span-2">
-                <input
-                  type="checkbox"
-                  checked={followSelected}
-                  onChange={(event) => setFollowSelected(event.target.checked)}
-                />
-                Follow the baseball
-              </label>
-
-              <div className="button-row control-span-2">
-                <button
-                  type="button"
-                  onClick={onThrow}
-                >
-                  Throw
-                </button>
-                <button type="button" onClick={resetCamera}>
-                  Reset camera
-                </button>
-              </div>
-            </>
-          ) : null}
-
-          {isNamedOrbit ? (
-            <>
-              {isBinary ? (
-                <>
-                  <label className="control-span-2">
-                    <span className="slider-label">
-                      <span>Planet A mass</span>
-                      <strong>{binaryBodyAMass.toFixed(1)} relative units</strong>
-                    </span>
-                    <input
-                      type="range"
-                      min={BINARY_MASS_MIN}
-                      max={BINARY_MASS_MAX}
-                      step={BINARY_MASS_STEP}
-                      value={binaryBodyAMass}
-                      onChange={(event) => setBinaryBodyAMass(Number(event.target.value))}
-                    />
-                  </label>
-
-                  <label className="control-span-2">
-                    <span className="slider-label">
-                      <span>Planet B mass</span>
-                      <strong>{binaryBodyBMass.toFixed(1)} relative units</strong>
-                    </span>
-                    <input
-                      type="range"
-                      min={BINARY_MASS_MIN}
-                      max={BINARY_MASS_MAX}
-                      step={BINARY_MASS_STEP}
-                      value={binaryBodyBMass}
-                      onChange={(event) => setBinaryBodyBMass(Number(event.target.value))}
-                    />
-                  </label>
-
-                  <label className="control-span-2">
-                    <span className="slider-label">
-                      <span>Orbital eccentricity</span>
-                      <strong>{binaryEccentricity.toFixed(2)}</strong>
-                    </span>
-                    <input
-                      type="range"
-                      min={BINARY_ECCENTRICITY_MIN}
-                      max={BINARY_ECCENTRICITY_MAX}
-                      step={BINARY_ECCENTRICITY_STEP}
-                      value={binaryEccentricity}
-                      onChange={(event) => setBinaryEccentricity(Number(event.target.value))}
-                    />
-                    <span className="gravity-distance-hints">
-                      0 is circular · higher values make a more elongated orbit and a stronger
-                      closest-approach speed-up
-                    </span>
-                  </label>
-
-                  {binarySnapshot ? (
-                    <div className="gravity-selection control-span-2" aria-live="polite">
-                      <div className="gravity-selection-title">Shared center of mass</div>
-                      <div className="gravity-selection-meta">
-                        <span>
-                          A semimajor radius:{" "}
-                          <strong>
-                            {(
-                              (binarySnapshot.bodyAOrbitRadiusPx /
-                                binarySnapshot.separationPx) *
-                              100
-                            ).toFixed(1)}%
-                          </strong>
-                        </span>
-                        <span>
-                          B semimajor radius:{" "}
-                          <strong>
-                            {(
-                              (binarySnapshot.bodyBOrbitRadiusPx /
-                                binarySnapshot.separationPx) *
-                              100
-                            ).toFixed(1)}%
-                          </strong>
-                        </span>
-                        <span>
-                          Separation now:{" "}
-                          <strong>
-                            {(
-                              (binarySnapshot.currentSeparationPx /
-                                binarySnapshot.separationPx) *
-                              100
-                            ).toFixed(0)}%
-                          </strong>
-                        </span>
-                      </div>
-                      <p>
-                        The cross is the barycenter and the shared focus of both ellipses. At every
-                        moment, m<sub>A</sub>r<sub>A</sub> = m<sub>B</sub>r<sub>B</sub>, so the
-                        heavier planet stays closer. Closest-to-farthest separation runs from{" "}
-                        <strong>
-                          {(
-                            (binarySnapshot.periapsisSeparationPx /
-                              binarySnapshot.separationPx) *
-                            100
-                          ).toFixed(0)}%
-                        </strong>{" "}
-                        to{" "}
-                        <strong>
-                          {(
-                            (binarySnapshot.apoapsisSeparationPx /
-                              binarySnapshot.separationPx) *
-                            100
-                          ).toFixed(0)}%
-                        </strong>{" "}
-                        of the semimajor axis.
-                      </p>
-                    </div>
-                  ) : null}
-
-                  <label
-                    className={`checkbox gravity-kepler-toggle control-span-2${
-                      showSweptArea ? " is-active" : ""
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={showSweptArea}
-                      onChange={(event) => setShowSweptArea(event.target.checked)}
-                    />
-                    <span>Kepler’s 2nd law · show equal-time area</span>
-                  </label>
-                  {showSweptArea ? (
-                    <span className="gravity-distance-hints control-span-2">
-                      Each shaded wedge spans the previous 10% of a period. Its shape changes
-                      around the ellipse, but its swept area stays constant.
-                    </span>
-                  ) : null}
-                </>
-              ) : null}
-
-              <label className="control-span-2">
-                <span className="slider-label">
-                  <span>Time scale</span>
-                  <strong>{timeScale.toFixed(1)}×</strong>
-                </span>
-                <input
-                  type="range"
-                  min={0.2}
-                  max={8}
-                  step={0.1}
-                  value={timeScale}
-                  onChange={(event) => setTimeScale(Number(event.target.value))}
-                />
-              </label>
-
-              {isHistoric ? (
-                <div className="control-span-2">
-                  <label>
-                    Historical model
-                    <select
-                      value={historicModel}
-                      onChange={(event) => setHistoricModel(event.target.value as HistoricModelId)}
-                      aria-label="Historical Solar System model"
-                    >
-                      {HISTORIC_MODEL_OPTIONS.map((opt) => (
-                        <option key={opt.id} value={opt.id}>
-                          {opt.label} ({opt.yearHint})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <p className="gravity-distance-hints" style={{ marginTop: "0.45rem" }}>
-                    <strong>{historicMeta.bizarreHook}</strong> {historicMeta.summary} Leave trails
-                    on; in Ptolemy, keep Mars selected to watch the epicycle loops.
-                  </p>
-                </div>
-              ) : null}
-
-              {isNearEarth ? (
-                <label className="control-span-2">
-                  <span className="slider-label">
-                    <span>How much space is in view?</span>
-                    <strong>{formatDistance(viewHalfWidthKm, "km")}</strong>
-                  </span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={0.1}
-                    value={kmToSlider(viewHalfWidthKm)}
-                    onChange={(event) => setViewHalfWidthKm(sliderToKm(Number(event.target.value)))}
+          <StageSection title="Bodies">
+            <div className="stage-pills" role="list">
+              {bodyChips.map((body) => (
+                <span key={body.id} role="listitem">
+                  <StageToggle
+                    label={body.shortLabel}
+                    tip={body.name}
+                    on={selected?.id === body.id}
+                    onChange={() => selectBodyById(body.id)}
                   />
-                  <span className="gravity-distance-hints">
-                    Opens the neighborhood around Earth (ISS → Moon → JWST). The Sun stays on
-                    stage and Earth keeps orbiting it — the Earth–Sun gap is compressed when
-                    you zoom in so the year orbit remains visible.
-                  </span>
-                </label>
-              ) : null}
-
-              <label className="control-span-2">
-                <span className="slider-label">
-                  <span>Camera zoom</span>
-                  <strong>{cameraZoom.toFixed(1)}×</strong>
                 </span>
-                <input
-                  type="range"
-                  min={1}
-                  max={12}
-                  step={0.1}
-                  value={cameraZoom}
-                  onChange={(event) => setCameraZoom(clampZoom(Number(event.target.value), 16))}
-                />
-              </label>
+              ))}
+            </div>
+          </StageSection>
+        </>
+      ) : null}
 
-              <label className="checkbox control-span-2">
-                <input
-                  type="checkbox"
-                  checked={followSelected}
-                  onChange={(event) => {
-                    const next = event.target.checked;
-                    setFollowSelected(next);
-                    if (next) {
-                      focusOnSelected({ enableFollow: true });
-                    }
-                  }}
-                />
-                Keep the camera on the selected body
-              </label>
-
-              <div className="button-row control-span-2">
-                <button
-                  type="button"
-                  disabled={!selected}
-                  onClick={() => focusOnSelected({ zoomIn: true, enableFollow: true })}
-                >
-                  Zoom & follow
-                </button>
-                <button type="button" onClick={resetCamera}>
-                  Reset camera
-                </button>
-              </div>
-
-              {selected ? (
-                <div className="gravity-selection control-span-2" aria-live="polite">
-                  <div className="gravity-selection-title">{selected.name}</div>
-                  <div className="gravity-selection-meta">
-                    {selected.massLabel ? (
-                      <span>
-                        Mass: <strong>{selected.massLabel}</strong>
-                      </span>
-                    ) : null}
-                    <span>
-                      Distance: <strong>{selected.distanceLabel}</strong>
-                    </span>
-                    <span>
-                      Period: <strong>{selected.periodLabel}</strong>
-                    </span>
-                  </div>
-                  <p>{selected.description}</p>
-                </div>
-              ) : (
-                <p className="subtle control-span-2">
-                  Click a body (or a chip below) to select it, then try Follow or Zoom & follow.
-                </p>
-              )}
-
-              <div className="gravity-body-list control-span-2" role="list">
-                {(scenario === "solar-system"
-                  ? SCENARIOS["solar-system"].bodies
-                  : scenario === "near-earth"
-                    ? SCENARIOS["near-earth"].bodies
-                    : sim.getSnapshot().bodies.map((b) => ({
-                        id: b.id,
-                        shortLabel: b.shortLabel
-                      }))
-                ).map((body) => (
-                  <button
-                    key={body.id}
-                    type="button"
-                    role="listitem"
-                    className={
-                      selected?.id === body.id ? "gravity-body-chip is-selected" : "gravity-body-chip"
-                    }
-                    onClick={() => selectBodyById(body.id)}
-                  >
-                    {body.shortLabel}
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : null}
-
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={showTrails}
-              onChange={(event) => setShowTrails(event.target.checked)}
-            />
-            Show trails
-          </label>
-
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={showVelocityVectors}
-              onChange={(event) => setShowVelocityVectors(event.target.checked)}
-            />
-            Show velocity (green)
-          </label>
-
-          <label className="checkbox control-span-2">
-            <input
-              type="checkbox"
-              checked={showForceVectors}
-              onChange={(event) => setShowForceVectors(event.target.checked)}
-            />
-            Show gravitational pull (orange)
-          </label>
-
-          <div className="button-row control-span-2">
-            <button type="button" onClick={onStart}>
-              Start
-            </button>
-            <button type="button" onClick={onThrow}>
-              {isEarthPitch ? "Throw" : "Run"}
-            </button>
-            <button type="button" onClick={onPauseToggle}>
-              {running && !paused ? "Pause" : "Resume"}
-            </button>
-            <button type="button" onClick={onNextPreset} disabled={!isEarthPitch}>
-              Next
-            </button>
-            <button type="button" onClick={onReset}>
-              Reset
-            </button>
-          </div>
-
-          <div className="stats control-span-2">
-            {isPlayground ? (
-              <>
-                <div>
-                  Particles: <strong>{Math.round(particleCount)}</strong>
-                </div>
-                <div>
-                  Avg speed: <strong>{formatNumber(avgSpeed)}</strong>
-                </div>
-                <div>
-                  Kinetic energy: <strong>{Math.round(kineticEnergy)}</strong>
-                </div>
-              </>
-            ) : isEarthPitch ? (
-              <>
-                <div>
-                  Regime: <strong>{pitchRegimeLabel(pitchRegime)}</strong>
-                </div>
-                <div>
-                  Camera:{" "}
-                  <strong>
-                    {followSelected ? "following ball" : "scene"} · {cameraZoom.toFixed(1)}×
-                  </strong>
-                </div>
-              </>
-            ) : isBinary && binarySnapshot ? (
-              <>
-                <div>
-                  Total mass:{" "}
-                  <strong>{(binarySnapshot.bodyAMass + binarySnapshot.bodyBMass).toFixed(1)}</strong>
-                </div>
-                <div>
-                  Orbit period: <strong>{binarySnapshot.orbitalPeriodSeconds.toFixed(1)} sim s</strong>
-                </div>
-                <div>
-                  Eccentricity: <strong>{binarySnapshot.eccentricity.toFixed(2)}</strong>
-                </div>
-                <div>
-                  Barycenter: <strong>fixed at the shared focus</strong>
-                </div>
-              </>
-            ) : (
-              <>
-                <div>
-                  Scenario: <strong>{scenarioMeta.title}</strong>
-                </div>
-                <div>
-                  Camera:{" "}
-                  <strong>
-                    {followSelected ? "following" : "free"} · {cameraZoom.toFixed(1)}×
-                  </strong>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </ControlCard>
+      {displayToggles}
+    </>
   );
 
-  const renderedControls = controlsPortalTarget
-    ? createPortal(
-        <div className="gravity-controls-popup-content">
-          <div className="gravity-controls-popup-toolbar">
-            <span>Live controls</span>
-            <button type="button" onClick={dockControls}>
-              Return controls
-            </button>
+  const cameraReadout = isEarthPitch
+    ? `${followSelected ? "following ball" : "scene"} · ${cameraZoom.toFixed(1)}×`
+    : `${followSelected ? "following" : "free"} · ${cameraZoom.toFixed(1)}×`;
+
+  const selectedReadouts = !isNamedOrbit ? null : selected ? (
+    <div className="gravity-readout-wrap" aria-live="polite">
+      <StageReadout label="Selected" value={selected.name} tip={selected.description} />
+      {selected.massLabel ? <StageReadout label="Mass" value={selected.massLabel} /> : null}
+      <StageReadout
+        label="Distance"
+        value={selectedBody && !selectedBody.isCenter ? pct(selectedBody.distanceValue, 1) : selected.distanceLabel}
+        tip={selectedBody ? selected.distanceLabel : undefined}
+      />
+      <StageReadout label="Period" value={selected.periodLabel} />
+    </div>
+  ) : (
+    <StageReadout label="Selected" value="none" muted tip={TIP.noSelection} />
+  );
+
+  const readouts = (
+    <>
+      {isPlayground ? (
+        <>
+          <StageReadout label="Particles" value={String(Math.round(particleCount))} />
+          <StageReadout label="Avg speed" value={formatNumber(avgSpeed)} tip={TIP.avgSpeed} />
+          <StageReadout label="Kinetic energy" value={String(Math.round(kineticEnergy))} tip={TIP.kineticEnergy} />
+        </>
+      ) : null}
+
+      {isEarthPitch ? (
+        <>
+          <StageHero label="Speed" value={pitchSpeedNumber(pitchSpeed)} tip={TIP.pitchSpeed} />
+          <div className="gravity-readout-wrap">
+            <StageReadout label="Regime" value={pitchRegimeLabel(pitchRegime)} tip={TIP.regime} />
           </div>
-          {controlsPanel}
+          <StageReadout label="Ball" value={ballFlying ? "in flight" : "impact"} />
+        </>
+      ) : null}
+
+      {isBinary && binarySnapshot ? (
+        <>
+          <StageHero
+            label="Separation now"
+            value={pct(binaryShare(binarySnapshot.currentSeparationPx), 0)}
+            tip={TIP.separationNow}
+          />
+          <StageReadout
+            label="Closest-to-farthest"
+            value={`${pct(binaryShare(binarySnapshot.periapsisSeparationPx), 0)}–${pct(
+              binaryShare(binarySnapshot.apoapsisSeparationPx),
+              0
+            )}`}
+            tip={TIP.separationRange}
+          />
+          <StageReadout
+            label="A semimajor radius"
+            value={pct(binaryShare(binarySnapshot.bodyAOrbitRadiusPx), 1)}
+            tip={TIP.semimajorA}
+          />
+          <StageReadout
+            label="B semimajor radius"
+            value={pct(binaryShare(binarySnapshot.bodyBOrbitRadiusPx), 1)}
+            tip={TIP.semimajorB}
+          />
+          <StageReadout label="Total mass" value={(binarySnapshot.bodyAMass + binarySnapshot.bodyBMass).toFixed(1)} />
+          <StageReadout label="Orbit period" value={`${binarySnapshot.orbitalPeriodSeconds.toFixed(1)} sim s`} />
+          <StageReadout label="Eccentricity" value={binarySnapshot.eccentricity.toFixed(2)} />
+          <StageReadout label="Barycenter" value="fixed" muted tip={TIP.barycenter} />
+          <span className="gravity-readout-sep" aria-hidden="true" />
+        </>
+      ) : null}
+
+      {selectedReadouts}
+      {gapCompressed ? <StageReadout label="Earth–Sun gap" value="compressed" muted tip={TIP.gapCompressed} /> : null}
+      {isPlayground ? null : <StageReadout label="Camera" value={cameraReadout} muted />}
+    </>
+  );
+
+  const info = (
+    <>
+      <h4>{scenarioMeta.title}</h4>
+      <ul>
+        <li>{scenarioMeta.summary}</li>
+        <li>{scenarioMeta.note}</li>
+        {scenarioNote && scenarioNote !== scenarioMeta.note ? <li>{scenarioNote}</li> : null}
+      </ul>
+
+      {isEarthPitch ? (
+        <>
+          <h4>Newton’s pitch</h4>
+          <ul>
+            <li>
+              Start zoomed in with a hard throw: the ground looks flat and the ball falls. Zoom out to see the globe, then
+              raise the speed toward circular (~1×) and escape (~1.41×).
+            </li>
+            <li>Handy markers: hard throw ≈ 0.05× · circular 1.00× · escape ≈ 1.41×</li>
+            <li>Zoom in for a flat “local” horizon; zoom out to see Earth as a globe again.</li>
+          </ul>
+        </>
+      ) : null}
+
+      {isBinary && binarySnapshot ? (
+        <>
+          <h4>Shared center of mass</h4>
+          <ul>
+            <li>
+              The cross is the barycenter and the shared focus of both ellipses. At every moment, m<sub>A</sub>r
+              <sub>A</sub> = m<sub>B</sub>r<sub>B</sub>, so the heavier planet stays closer. Closest-to-farthest
+              separation runs from {pct(binaryShare(binarySnapshot.periapsisSeparationPx), 0)} to{" "}
+              {pct(binaryShare(binarySnapshot.apoapsisSeparationPx), 0)} of the semimajor axis.
+            </li>
+            <li>Eccentricity: 0 is circular · higher values make a more elongated orbit and a stronger closest-approach speed-up.</li>
+            <li>Kepler’s 2nd law: {keplerHint}</li>
+          </ul>
+        </>
+      ) : null}
+
+      {isHistoric ? (
+        <>
+          <h4>
+            {historicMeta.label} · {historicMeta.yearHint}
+          </h4>
+          <ul>
+            <li>
+              <strong>{historicMeta.bizarreHook}</strong> {historicMeta.summary} Leave trails on; in Ptolemy, keep Mars
+              selected to watch the epicycle loops.
+            </li>
+            <li>Historic models are kinematic cartoons, so they draw no gravitational-pull arrows.</li>
+          </ul>
+        </>
+      ) : null}
+
+      {isNearEarth ? (
+        <>
+          <h4>How much space is in view?</h4>
+          <ul>
+            <li>{TIP.nearEarthView}</li>
+          </ul>
+        </>
+      ) : null}
+
+      {isNamedOrbit ? (
+        <>
+          <h4>{selected ? selected.name : "Selecting a body"}</h4>
+          <ul>
+            {selected ? <li>{selected.description}</li> : null}
+            <li>{TIP.noSelection}</li>
+          </ul>
+        </>
+      ) : null}
+
+      <h4>Colour key</h4>
+      <ul>
+        <li>Green arrows: velocity. Orange arrows: gravitational pull. Lengths are scaled for readability.</li>
+        {isNamedOrbit ? <li>A dashed ring marks the selected body.</li> : null}
+      </ul>
+    </>
+  );
+
+  const popupContent = controlsPortalTarget
+    ? createPortal(
+        <div className={`stage gravity-popup-stage${lightSurface ? " is-light" : ""}`}>
+          <div className="stage-glass stage-topbar">
+            {transport}
+            <StageDivider />
+            <StagePillButton label="Return controls" tip={TIP.dock} onClick={dockControls} />
+          </div>
+          <div className="stage-glass stage-controls">{controls}</div>
+          <div className="stage-glass stage-readouts">{readouts}</div>
         </div>,
         controlsPortalTarget
       )
-    : controlsPanel;
+    : null;
 
   return (
-    <div className={`gravity-layout${controlsPortalTarget ? " has-detached-controls" : ""}`}>
-      {renderedControls}
-
-      <div ref={canvasShellRef} className="canvas-shell card gravity-canvas-shell">
-        <div className="gravity-canvas-frame">
-          <canvas
-            ref={canvasRef}
-            width={CANVAS_W}
-            height={CANVAS_H}
-            style={{ cursor: isPlayground ? "grab" : "pointer" }}
-          />
-          {overlayControls}
-        </div>
-        {displayNotice ? (
-          <p className="gravity-display-notice" role="status">
-            {displayNotice}
-          </p>
-        ) : null}
-      </div>
-    </div>
+    <>
+      <AppletStage
+        logicalWidth={CANVAS_W}
+        logicalHeight={CANVAS_H}
+        canvasRef={canvasRef}
+        canvasLabel={`Orbital motion: ${scenarioMeta.title}`}
+        canvasProps={{ style: { cursor: isPlayground ? "grab" : "pointer" } }}
+        toolbar={toolbar}
+        controls={popped ? undefined : controls}
+        readouts={readouts}
+        info={info}
+        play={{ visible: !running || paused, label: playLabel, onClick: onPlay }}
+        surface={lightSurface ? "light" : "dark"}
+        rootClassName="gravity-stage"
+      />
+      {popupContent}
+    </>
   );
 }

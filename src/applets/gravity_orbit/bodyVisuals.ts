@@ -1,3 +1,4 @@
+import { setLogicalTransform } from "../../core/canvasScale";
 import { BodyVisualKind, GravityCanvasTheme } from "./types";
 import { worldToScreen, type CameraView } from "./camera";
 
@@ -381,7 +382,8 @@ export function drawNamedBody(
     const screen = worldToScreen(options.camera, { x, y });
     const screenR = radius * options.camera.zoom;
     ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // Screen space in logical units (the backing store may be at device resolution).
+    setLogicalTransform(ctx, options.camera.width);
     drawLabel(
       ctx,
       screen.x,

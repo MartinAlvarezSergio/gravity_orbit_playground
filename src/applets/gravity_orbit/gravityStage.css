@@ -1,0 +1,84 @@
+/* Gravity Orbits on the applet stage: small additions scoped to this applet.
+   This file loads before src/styles.css, so selectors carry an extra class or :root
+   to win over the kit rules they adjust. */
+
+/* Option labels are kept word-for-word (worksheets cite them), so long pills may wrap. */
+:root .gravity-stage .gravity-long-pills .stage-pill,
+:root .gravity-popup-stage .gravity-long-pills .stage-pill {
+  white-space: normal;
+  text-align: left;
+  border-radius: 14px;
+}
+
+/* Two camera actions side by side in the 240 px panel. */
+.stage-pills.gravity-pill-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+:root .gravity-pill-pair .stage-pill {
+  padding-inline: 0.4rem;
+}
+
+/* Readouts whose values can be long (body names, distances) may wrap. */
+.gravity-readout-wrap {
+  display: contents;
+}
+
+:root .gravity-readout-wrap .stage-readout strong {
+  white-space: normal;
+  text-align: right;
+}
+
+.gravity-readout-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.stage.is-light .gravity-readout-sep {
+  background: rgba(28, 48, 76, 0.14);
+}
+
+.gravity-notice {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #ffcf8a;
+}
+
+.stage.is-light .gravity-notice {
+  color: #8a4b00;
+}
+
+/* Pop-out controls window: the same panels, stacked instead of overlaid. */
+:root .stage.gravity-popup-stage {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  overflow: visible;
+  border-radius: 0;
+  background: transparent;
+}
+
+.gravity-popup-stage .stage-glass {
+  position: static;
+  transform: none;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+}
+
+.gravity-popup-stage .stage-topbar {
+  flex-wrap: wrap;
+}
+
+/* Small screens: the kit makes the info panel static, so its absolutely placed close
+   button would land on the top bar; keep the panel as its containing block. */
+@media (max-width: 760px) {
+  .gravity-stage .stage-info {
+    position: relative;
+    inset: auto;
+  }
+}
