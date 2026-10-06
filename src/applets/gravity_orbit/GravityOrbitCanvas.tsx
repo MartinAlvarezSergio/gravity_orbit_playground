@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AppletHostAdapter } from "../../core/host";
 import { ControlCard } from "../../ui/ControlCard";
 import {
@@ -37,11 +38,20 @@ import {
 } from "./scenarios";
 import { createGravityOrbitSim } from "./sim";
 import { renderGravityOrbit } from "./render";
-import { ScenarioId, SelectedBodyInfo } from "./types";
+import { GravityCanvasTheme, ScenarioId, SelectedBodyInfo } from "./types";
 
 const MASS_MIN = 20;
 const MASS_MAX = 320;
 const MASS_DEFAULT = 120;
+const BINARY_MASS_MIN = 0.2;
+const BINARY_MASS_MAX = 12;
+const BINARY_MASS_STEP = 0.1;
+const BINARY_BODY_A_DEFAULT = 3;
+const BINARY_BODY_B_DEFAULT = 1;
+const BINARY_ECCENTRICITY_MIN = 0;
+const BINARY_ECCENTRICITY_MAX = 0.8;
+const BINARY_ECCENTRICITY_STEP = 0.01;
+const BINARY_ECCENTRICITY_DEFAULT = 0.35;
 const PARTICLE_MIN = 20;
 const PARTICLE_MAX = 450;
 const PARTICLE_DEFAULT = 140;
@@ -80,6 +90,10 @@ function clampNearEarthViewForBody(distanceKm: number): number {
   );
 }
 
+function currentCanvasTheme(): GravityCanvasTheme {
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+
 /** View scale that fits each near-Earth target without flipping the heliocentric frame. */
 function nearEarthViewForBody(bodyId: string, distanceKm: number): number {
   if (bodyId === "sun") {
@@ -95,6 +109,9 @@ function nearEarthViewForBody(bodyId: string, distanceKm: number): number {
 
 export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasShellRef = useRef<HTMLDivElement | null>(null);
+  const controlsPopupRef = useRef<Window | null>(null);
+  const controlsPopupCleanupRef = useRef<(() => void) | null>(null);
   const dragRef = useRef(false);
   const cameraRef = useRef<CameraView>(defaultCamera(CANVAS_W, CANVAS_H));
   const followRef = useRef(false);
@@ -103,11 +120,17 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
   const [centralMass, setCentralMass] = useState(MASS_DEFAULT);
+  const [binaryBodyAMass, setBinaryBodyAMass] = useState(BINARY_BODY_A_DEFAULT);
+  const [binaryBodyBMass, setBinaryBodyBMass] = useState(BINARY_BODY_B_DEFAULT);
+  const [binaryEccentricity, setBinaryEccentricity] = useState(
+    BINARY_ECCENTRICITY_DEFAULT
+  );
   const [particleCount, setParticleCount] = useState(PARTICLE_DEFAULT);
   const [selfGravity, setSelfGravity] = useState(false);
   const [showVelocityVectors, setShowVelocityVectors] = useState(false);
   const [showForceVectors, setShowForceVectors] = useState(false);
   const [showTrails, setShowTrails] = useState(true);
+  const [showSweptArea, setShowSweptArea] = useState(false);
   const [viewHalfWidthKm, setViewHalfWidthKm] = useState(NEAR_EARTH_VIEW_DEFAULT_KM);
   const [timeScale, setTimeScale] = useState(1);
   const [cameraZoom, setCameraZoom] = useState(1);
@@ -119,6 +142,10 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
   const [selected, setSelected] = useState<SelectedBodyInfo | null>(null);
   const [scenarioNote, setScenarioNote] = useState(SCENARIOS["solar-system"].note);
   const [historicModel, setHistoricModel] = useState<HistoricModelId>(DEFAULT_HISTORIC_MODEL);
+  const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false);
+  const [controlsPortalTarget, setControlsPortalTarget] = useState<HTMLElement | null>(null);
+  const [displayNotice, setDisplayNotice] = useState("");
+  const [canvasTheme, setCanvasTheme] = useState<GravityCanvasTheme>(currentCanvasTheme);
 
   const reducedMotion = host?.readReducedMotion?.() ?? false;
   const sim = useMemo(() => {
@@ -135,6 +162,35 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
   useEffect(() => {
     followRef.current = followSelected;
   }, [followSelected]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => setCanvasTheme(currentCanvasTheme()));
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"]
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    function onFullscreenChange(): void {
+      setIsCanvasFullscreen(document.fullscreenElement === canvasShellRef.current);
+    }
+
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
+
+  useEffect(
+    () => () => {
+      controlsPopupCleanupRef.current?.();
+      const popup = controlsPopupRef.current;
+      if (popup && !popup.closed) {
+        popup.close();
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     const maxZoom = scenario === "earth-pitch" ? PITCH_MAX_ZOOM : 16;
@@ -168,6 +224,10 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
           focus: earthPitchCameraFocus(pitch, zoom)
         };
       }
+      setRunning(true);
+    } else if (scenario === "binary-system") {
+      sim.selectBody("binary-a");
+      setSelected(sim.getSelectedInfo());
       setRunning(true);
     } else if (scenario === "near-earth") {
       // Sun-centered stage: Earth visibly orbits; slider only opens the neighborhood.
@@ -205,6 +265,14 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
   useEffect(() => {
     sim.setCenterMass(centralMass);
   }, [centralMass, sim]);
+
+  useEffect(() => {
+    sim.setBinaryMasses(binaryBodyAMass, binaryBodyBMass);
+  }, [binaryBodyAMass, binaryBodyBMass, sim]);
+
+  useEffect(() => {
+    sim.setBinaryEccentricity(binaryEccentricity);
+  }, [binaryEccentricity, sim]);
 
   useEffect(() => {
     sim.setParticleCount(particleCount);
@@ -302,9 +370,11 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
       }
 
       renderGravityOrbit(ctx, snapshot, {
+        theme: canvasTheme,
         showTrails,
         showVelocityVectors,
         showForceVectors,
+        showSweptArea,
         camera: cameraRef.current
       });
       setAvgSpeed(snapshot.averageSpeed);
@@ -317,7 +387,16 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [paused, running, showTrails, showVelocityVectors, showForceVectors, sim]);
+  }, [
+    canvasTheme,
+    paused,
+    running,
+    showTrails,
+    showVelocityVectors,
+    showForceVectors,
+    showSweptArea,
+    sim
+  ]);
 
   useEffect(() => {
     if (reducedMotion) {
@@ -442,6 +521,10 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
       event: "reset",
       scenario,
       centralMass,
+      binaryBodyAMass,
+      binaryBodyBMass,
+      binaryEccentricity,
+      showSweptArea,
       particleCount,
       selfGravity,
       viewHalfWidthKm
@@ -514,17 +597,130 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
     setPaused((v) => !v);
   }
 
+  async function toggleCanvasFullscreen(): Promise<void> {
+    const shell = canvasShellRef.current;
+    if (!shell) {
+      return;
+    }
+
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await shell.requestFullscreen();
+      }
+      setDisplayNotice("");
+    } catch {
+      setDisplayNotice("Fullscreen could not be opened in this browser.");
+    }
+  }
+
+  function dockControls(): void {
+    const popup = controlsPopupRef.current;
+    controlsPopupCleanupRef.current?.();
+    controlsPopupCleanupRef.current = null;
+    controlsPopupRef.current = null;
+    setControlsPortalTarget(null);
+    if (popup && !popup.closed) {
+      popup.close();
+    }
+  }
+
+  function openControlsPopup(): void {
+    const existingPopup = controlsPopupRef.current;
+    if (existingPopup && !existingPopup.closed) {
+      existingPopup.focus();
+      return;
+    }
+
+    const popup = window.open(
+      "",
+      "gravity-orbit-controls",
+      "popup=yes,width=420,height=900,resizable=yes,scrollbars=yes"
+    );
+    if (!popup) {
+      setDisplayNotice("The controls pop-up was blocked. Allow pop-ups, then try again.");
+      return;
+    }
+
+    const popupDocument = popup.document;
+    popupDocument.documentElement.lang = document.documentElement.lang || "en";
+    popupDocument.documentElement.dataset.theme =
+      document.documentElement.dataset.theme ?? "dark";
+    popupDocument.head.replaceChildren();
+    popupDocument.body.replaceChildren();
+
+    const title = popupDocument.createElement("title");
+    title.textContent = "Gravity Orbit Controls";
+    popupDocument.head.appendChild(title);
+
+    const viewport = popupDocument.createElement("meta");
+    viewport.name = "viewport";
+    viewport.content = "width=device-width, initial-scale=1";
+    popupDocument.head.appendChild(viewport);
+
+    document
+      .querySelectorAll<HTMLLinkElement | HTMLStyleElement>('link[rel="stylesheet"], style')
+      .forEach((source) => {
+        const clone = source.cloneNode(true) as HTMLLinkElement | HTMLStyleElement;
+        if (source instanceof HTMLLinkElement && clone instanceof HTMLLinkElement) {
+          clone.href = source.href;
+        }
+        popupDocument.head.appendChild(clone);
+      });
+
+    popupDocument.body.className = "gravity-controls-popup-body";
+    const portalRoot = popupDocument.createElement("div");
+    portalRoot.className = "gravity-controls-popup-root";
+    popupDocument.body.appendChild(portalRoot);
+
+    function handlePopupClosed(): void {
+      if (controlsPopupRef.current !== popup) {
+        return;
+      }
+      controlsPopupCleanupRef.current?.();
+      controlsPopupCleanupRef.current = null;
+      controlsPopupRef.current = null;
+      setControlsPortalTarget(null);
+    }
+
+    const themeObserver = new MutationObserver(() => {
+      popupDocument.documentElement.dataset.theme =
+        document.documentElement.dataset.theme ?? "dark";
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"]
+    });
+
+    const cleanup = (): void => {
+      popup.removeEventListener("beforeunload", handlePopupClosed);
+      popup.removeEventListener("pagehide", handlePopupClosed);
+      themeObserver.disconnect();
+    };
+    popup.addEventListener("beforeunload", handlePopupClosed);
+    popup.addEventListener("pagehide", handlePopupClosed);
+    controlsPopupRef.current = popup;
+    controlsPopupCleanupRef.current = cleanup;
+    setControlsPortalTarget(portalRoot);
+    setDisplayNotice("");
+    popup.focus();
+  }
+
   const isPlayground = scenario === "playground";
+  const isBinary = scenario === "binary-system";
   const isNearEarth = scenario === "near-earth";
   const isEarthPitch = scenario === "earth-pitch";
   const isHistoric = scenario === "historic-models";
-  const isNamedOrbit = scenario === "solar-system" || scenario === "near-earth" || isHistoric;
+  const isNamedOrbit =
+    isBinary || scenario === "solar-system" || scenario === "near-earth" || isHistoric;
   const scenarioMeta = SCENARIOS[scenario];
+  const binarySnapshot = isBinary ? sim.getSnapshot().binarySystem : null;
   const historicMeta =
     HISTORIC_MODEL_OPTIONS.find((m) => m.id === historicModel) ?? HISTORIC_MODEL_OPTIONS[0];
 
   const overlayControls = (
-    <div className="gravity-canvas-toolbar" role="toolbar" aria-label="Playback controls">
+    <div className="gravity-canvas-toolbar" role="toolbar" aria-label="Playback and display controls">
       <button type="button" onClick={onStart}>
         Start
       </button>
@@ -540,11 +736,34 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
       <button type="button" onClick={onReset}>
         Reset
       </button>
+      <span className="gravity-toolbar-divider" aria-hidden="true" />
+      <button
+        type="button"
+        className="gravity-display-button"
+        onClick={() => void toggleCanvasFullscreen()}
+        aria-label={isCanvasFullscreen ? "Exit full screen motion display" : "Maximise motion display"}
+        title={isCanvasFullscreen ? "Exit full screen" : "Make the motion display full screen"}
+      >
+        <span aria-hidden="true">{isCanvasFullscreen ? "↙" : "⛶"}</span>{" "}
+        {isCanvasFullscreen ? "Exit" : "Maximise"}
+      </button>
+      <button
+        type="button"
+        className="gravity-display-button"
+        onClick={controlsPortalTarget ? dockControls : openControlsPopup}
+        title={
+          controlsPortalTarget
+            ? "Return the controls to this page"
+            : "Open the live controls in a movable window"
+        }
+      >
+        <span aria-hidden="true">{controlsPortalTarget ? "↩" : "↗"}</span>{" "}
+        {controlsPortalTarget ? "Dock controls" : "Pop out controls"}
+      </button>
     </div>
   );
 
-  return (
-    <div className="gravity-layout">
+  const controlsPanel = (
       <ControlCard title="Gravity Orbits & The Solar System" subtitle={scenarioMeta.summary}>
         <div className="control-grid">
           <label className="control-span-2">
@@ -721,6 +940,137 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
 
           {isNamedOrbit ? (
             <>
+              {isBinary ? (
+                <>
+                  <label className="control-span-2">
+                    <span className="slider-label">
+                      <span>Planet A mass</span>
+                      <strong>{binaryBodyAMass.toFixed(1)} relative units</strong>
+                    </span>
+                    <input
+                      type="range"
+                      min={BINARY_MASS_MIN}
+                      max={BINARY_MASS_MAX}
+                      step={BINARY_MASS_STEP}
+                      value={binaryBodyAMass}
+                      onChange={(event) => setBinaryBodyAMass(Number(event.target.value))}
+                    />
+                  </label>
+
+                  <label className="control-span-2">
+                    <span className="slider-label">
+                      <span>Planet B mass</span>
+                      <strong>{binaryBodyBMass.toFixed(1)} relative units</strong>
+                    </span>
+                    <input
+                      type="range"
+                      min={BINARY_MASS_MIN}
+                      max={BINARY_MASS_MAX}
+                      step={BINARY_MASS_STEP}
+                      value={binaryBodyBMass}
+                      onChange={(event) => setBinaryBodyBMass(Number(event.target.value))}
+                    />
+                  </label>
+
+                  <label className="control-span-2">
+                    <span className="slider-label">
+                      <span>Orbital eccentricity</span>
+                      <strong>{binaryEccentricity.toFixed(2)}</strong>
+                    </span>
+                    <input
+                      type="range"
+                      min={BINARY_ECCENTRICITY_MIN}
+                      max={BINARY_ECCENTRICITY_MAX}
+                      step={BINARY_ECCENTRICITY_STEP}
+                      value={binaryEccentricity}
+                      onChange={(event) => setBinaryEccentricity(Number(event.target.value))}
+                    />
+                    <span className="gravity-distance-hints">
+                      0 is circular · higher values make a more elongated orbit and a stronger
+                      closest-approach speed-up
+                    </span>
+                  </label>
+
+                  {binarySnapshot ? (
+                    <div className="gravity-selection control-span-2" aria-live="polite">
+                      <div className="gravity-selection-title">Shared center of mass</div>
+                      <div className="gravity-selection-meta">
+                        <span>
+                          A semimajor radius:{" "}
+                          <strong>
+                            {(
+                              (binarySnapshot.bodyAOrbitRadiusPx /
+                                binarySnapshot.separationPx) *
+                              100
+                            ).toFixed(1)}%
+                          </strong>
+                        </span>
+                        <span>
+                          B semimajor radius:{" "}
+                          <strong>
+                            {(
+                              (binarySnapshot.bodyBOrbitRadiusPx /
+                                binarySnapshot.separationPx) *
+                              100
+                            ).toFixed(1)}%
+                          </strong>
+                        </span>
+                        <span>
+                          Separation now:{" "}
+                          <strong>
+                            {(
+                              (binarySnapshot.currentSeparationPx /
+                                binarySnapshot.separationPx) *
+                              100
+                            ).toFixed(0)}%
+                          </strong>
+                        </span>
+                      </div>
+                      <p>
+                        The cross is the barycenter and the shared focus of both ellipses. At every
+                        moment, m<sub>A</sub>r<sub>A</sub> = m<sub>B</sub>r<sub>B</sub>, so the
+                        heavier planet stays closer. Closest-to-farthest separation runs from{" "}
+                        <strong>
+                          {(
+                            (binarySnapshot.periapsisSeparationPx /
+                              binarySnapshot.separationPx) *
+                            100
+                          ).toFixed(0)}%
+                        </strong>{" "}
+                        to{" "}
+                        <strong>
+                          {(
+                            (binarySnapshot.apoapsisSeparationPx /
+                              binarySnapshot.separationPx) *
+                            100
+                          ).toFixed(0)}%
+                        </strong>{" "}
+                        of the semimajor axis.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  <label
+                    className={`checkbox gravity-kepler-toggle control-span-2${
+                      showSweptArea ? " is-active" : ""
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={showSweptArea}
+                      onChange={(event) => setShowSweptArea(event.target.checked)}
+                    />
+                    <span>Kepler’s 2nd law · show equal-time area</span>
+                  </label>
+                  {showSweptArea ? (
+                    <span className="gravity-distance-hints control-span-2">
+                      Each shaded wedge spans the previous 10% of a period. Its shape changes
+                      around the ellipse, but its swept area stays constant.
+                    </span>
+                  ) : null}
+                </>
+              ) : null}
+
               <label className="control-span-2">
                 <span className="slider-label">
                   <span>Time scale</span>
@@ -828,6 +1178,11 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                 <div className="gravity-selection control-span-2" aria-live="polite">
                   <div className="gravity-selection-title">{selected.name}</div>
                   <div className="gravity-selection-meta">
+                    {selected.massLabel ? (
+                      <span>
+                        Mass: <strong>{selected.massLabel}</strong>
+                      </span>
+                    ) : null}
                     <span>
                       Distance: <strong>{selected.distanceLabel}</strong>
                     </span>
@@ -939,6 +1294,22 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
                   </strong>
                 </div>
               </>
+            ) : isBinary && binarySnapshot ? (
+              <>
+                <div>
+                  Total mass:{" "}
+                  <strong>{(binarySnapshot.bodyAMass + binarySnapshot.bodyBMass).toFixed(1)}</strong>
+                </div>
+                <div>
+                  Orbit period: <strong>{binarySnapshot.orbitalPeriodSeconds.toFixed(1)} sim s</strong>
+                </div>
+                <div>
+                  Eccentricity: <strong>{binarySnapshot.eccentricity.toFixed(2)}</strong>
+                </div>
+                <div>
+                  Barycenter: <strong>fixed at the shared focus</strong>
+                </div>
+              </>
             ) : (
               <>
                 <div>
@@ -955,8 +1326,28 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
           </div>
         </div>
       </ControlCard>
+  );
 
-      <div className="canvas-shell card gravity-canvas-shell">
+  const renderedControls = controlsPortalTarget
+    ? createPortal(
+        <div className="gravity-controls-popup-content">
+          <div className="gravity-controls-popup-toolbar">
+            <span>Live controls</span>
+            <button type="button" onClick={dockControls}>
+              Return controls
+            </button>
+          </div>
+          {controlsPanel}
+        </div>,
+        controlsPortalTarget
+      )
+    : controlsPanel;
+
+  return (
+    <div className={`gravity-layout${controlsPortalTarget ? " has-detached-controls" : ""}`}>
+      {renderedControls}
+
+      <div ref={canvasShellRef} className="canvas-shell card gravity-canvas-shell">
         <div className="gravity-canvas-frame">
           <canvas
             ref={canvasRef}
@@ -966,6 +1357,11 @@ export function GravityOrbitCanvas({ host }: GravityOrbitCanvasProps): JSX.Eleme
           />
           {overlayControls}
         </div>
+        {displayNotice ? (
+          <p className="gravity-display-notice" role="status">
+            {displayNotice}
+          </p>
+        ) : null}
       </div>
     </div>
   );

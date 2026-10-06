@@ -2,8 +2,11 @@ import type { EarthPitchState } from "./earthPitch";
 import type { HistoricGuide, HistoricModelId } from "./historicModels";
 import { Vec2 } from "../../core/vector";
 
+export type GravityCanvasTheme = "light" | "dark";
+
 export type ScenarioId =
   | "playground"
+  | "binary-system"
   | "solar-system"
   | "near-earth"
   | "earth-pitch"
@@ -45,7 +48,9 @@ export type NamedBody = {
   drawRadius: number;
   /** Physical distance from scenario center (AU or km depending on scenario). */
   distanceValue: number;
-  distanceUnit: "AU" | "km";
+  distanceUnit: "AU" | "km" | "relative";
+  /** Relative mass used by the two-body barycenter mode. */
+  massValue?: number;
   /** Approximate orbital period shown to the learner (scenario time, not wall clock). */
   periodLabel: string;
   position: Vec2;
@@ -75,6 +80,26 @@ export type SelectedBodyInfo = {
   distanceLabel: string;
   periodLabel: string;
   speedLabel: string;
+  massLabel?: string;
+};
+
+export type BinarySystemSnapshot = {
+  bodyAMass: number;
+  bodyBMass: number;
+  eccentricity: number;
+  separationPx: number;
+  currentSeparationPx: number;
+  periapsisSeparationPx: number;
+  apoapsisSeparationPx: number;
+  bodyAOrbitRadiusPx: number;
+  bodyBOrbitRadiusPx: number;
+  orbitalPeriodSeconds: number;
+  barycenter: Vec2;
+  /** Fixed equal-time interval used for the Kepler second-law overlay. */
+  sweepPeriodFraction: number;
+  /** Recent orbital arcs spanning sweepPeriodFraction of one period. */
+  bodyASweptPath: Vec2[];
+  bodyBSweptPath: Vec2[];
 };
 
 export type GravitySnapshot = {
@@ -96,6 +121,8 @@ export type GravitySnapshot = {
   historicModel: HistoricModelId | null;
   /** Deferent / epicycle / ellipse guides for historic models. */
   historicGuides: HistoricGuide[];
+  /** Keplerian two-body teaching model, when scenario is binary-system. */
+  binarySystem: BinarySystemSnapshot | null;
   totalKineticEnergy: number;
   averageSpeed: number;
   note: string;

@@ -33,6 +33,7 @@ import {
   type ScenarioBodyDef
 } from "./scenarios";
 import {
+  BinarySystemSnapshot,
   GravityParticle,
   GravitySettings,
   GravitySnapshot,
@@ -50,6 +51,15 @@ const DRAG = 0.999;
 const MAX_SPEED = 400;
 const TRAIL_LENGTH = 48;
 const PLAYGROUND_TRAIL_LENGTH = 22;
+const BINARY_SEMIMAJOR_AXIS_PX = 240;
+const BINARY_TRAIL_LENGTH = 180;
+const BINARY_REFERENCE_TOTAL_MASS = 4;
+const BINARY_REFERENCE_PERIOD_SECONDS = 14;
+const BINARY_MASS_MIN = 0.2;
+const BINARY_MASS_MAX = 12;
+const BINARY_ECCENTRICITY_MAX = 0.8;
+const BINARY_SWEEP_PERIOD_FRACTION = 0.1;
+const BINARY_SWEEP_SAMPLES = 28;
 
 export type GravityOrbitSim = {
   step: (dt: number) => void;
@@ -58,6 +68,8 @@ export type GravityOrbitSim = {
   setCenterMass: (mass: number) => void;
   setParticleCount: (count: number) => void;
   setSelfGravity: (enabled: boolean) => void;
+  setBinaryMasses: (bodyAMass: number, bodyBMass: number) => void;
+  setBinaryEccentricity: (eccentricity: number) => void;
   setViewHalfWidthKm: (km: number) => void;
   setTimeScale: (scale: number) => void;
   setHistoricModel: (model: HistoricModelId) => void;
@@ -115,6 +127,210 @@ function sizeToRadius(sizeRank: number, scenario: ScenarioId): number {
     return clamp(sizeRank * 0.85, 4, 26);
   }
   return clamp(sizeRank * 0.9, 3.5, 22);
+}
+
+function binaryPeriodSeconds(bodyAMass: number, bodyBMass: number): number {
+  const totalMass = Math.max(BINARY_MASS_MIN * 2, bodyAMass + bodyBMass);
+  return BINARY_REFERENCE_PERIOD_SECONDS * Math.sqrt(BINARY_REFERENCE_TOTAL_MASS / totalMass);
+}
+
+function binaryOrbitRadii(
+  bodyAMass: number,
+  bodyBMass: number
+): { bodyA: number; bodyB: number } {
+  const totalMass = Math.max(BINARY_MASS_MIN * 2, bodyAMass + bodyBMass);
+  return {
+    bodyA: BINARY_SEMIMAJOR_AXIS_PX * (bodyBMass / totalMass),
+    bodyB: BINARY_SEMIMAJOR_AXIS_PX * (bodyAMass / totalMass)
+  };
+}
+
+/** Solve M = E - e sin(E) so motion advances uniformly in time, not in angle. */
+function eccentricAnomalyFromMean(meanAnomaly: number, eccentricity: number): number {
+  const tau = Math.PI * 2;
+  const mean = ((meanAnomaly % tau) + tau) % tau;
+  let eccentricAnomaly = eccentricity < 0.75 ? mean : Math.PI;
+  for (let i = 0; i < 8; i += 1) {
+    const f = eccentricAnomaly - eccentricity * Math.sin(eccentricAnomaly) - mean;
+    const derivative = 1 - eccentricity * Math.cos(eccentricAnomaly);
+    eccentricAnomaly -= f / Math.max(derivative, 1e-8);
+  }
+  return eccentricAnomaly;
+}
+
+function binaryRelativePosition(meanAnomaly: number, eccentricity: number): Vec2 {
+  const eccentricAnomaly = eccentricAnomalyFromMean(meanAnomaly, eccentricity);
+  return {
+    x:
+      BINARY_SEMIMAJOR_AXIS_PX *
+      (Math.cos(eccentricAnomaly) - eccentricity),
+    y:
+      BINARY_SEMIMAJOR_AXIS_PX *
+      Math.sqrt(Math.max(0, 1 - eccentricity * eccentricity)) *
+      Math.sin(eccentricAnomaly)
+  };
+}
+
+/** Orbital arc swept during a fixed fraction of a period (therefore a fixed time). */
+function binarySweptPath(
+  center: Vec2,
+  meanAnomaly: number,
+  eccentricity: number,
+  bodyScale: number
+): Vec2[] {
+  const meanSpan = Math.PI * 2 * BINARY_SWEEP_PERIOD_FRACTION;
+  const points: Vec2[] = [];
+  for (let i = 0; i <= BINARY_SWEEP_SAMPLES; i += 1) {
+    const sampleMean = meanAnomaly - meanSpan + (meanSpan * i) / BINARY_SWEEP_SAMPLES;
+    const relative = binaryRelativePosition(sampleMean, eccentricity);
+    points.push({
+      x: center.x + relative.x * bodyScale,
+      y: center.y + relative.y * bodyScale
+    });
+  }
+  return points;
+}
+
+function placeBinaryBodies(
+  bodies: NamedBody[],
+  center: Vec2,
+  bodyAMass: number,
+  bodyBMass: number,
+  eccentricity: number,
+  meanAnomaly: number,
+  timeScale: number
+): void {
+  const bodyA = bodyById(bodies, "binary-a");
+  const bodyB = bodyById(bodies, "binary-b");
+  if (!bodyA || !bodyB) {
+    return;
+  }
+
+  const radii = binaryOrbitRadii(bodyAMass, bodyBMass);
+  const period = binaryPeriodSeconds(bodyAMass, bodyBMass);
+  const meanMotion = (Math.PI * 2) / period;
+  const eccentricAnomaly = eccentricAnomalyFromMean(meanAnomaly, eccentricity);
+  const cos = Math.cos(eccentricAnomaly);
+  const sin = Math.sin(eccentricAnomaly);
+  const minorAxisFactor = Math.sqrt(Math.max(0, 1 - eccentricity * eccentricity));
+  const relativePosition = binaryRelativePosition(meanAnomaly, eccentricity);
+  const relativeX = relativePosition.x;
+  const relativeY = relativePosition.y;
+  const currentSeparation = Math.max(1e-6, Math.hypot(relativeX, relativeY));
+  const eccentricAnomalyRate = meanMotion / Math.max(1e-6, 1 - eccentricity * cos);
+  const relativeVx = -BINARY_SEMIMAJOR_AXIS_PX * sin * eccentricAnomalyRate;
+  const relativeVy =
+    BINARY_SEMIMAJOR_AXIS_PX * minorAxisFactor * cos * eccentricAnomalyRate;
+  const totalMass = bodyAMass + bodyBMass;
+  const bodyAFraction = bodyBMass / totalMass;
+  const bodyBFraction = bodyAMass / totalMass;
+  const gravitationalParameter =
+    meanMotion * meanMotion * BINARY_SEMIMAJOR_AXIS_PX ** 3;
+  const relativeAccelerationScale =
+    -gravitationalParameter / (currentSeparation * currentSeparation * currentSeparation);
+  const relativeAx = relativeX * relativeAccelerationScale;
+  const relativeAy = relativeY * relativeAccelerationScale;
+  const periodLabel = `~${period.toFixed(1)} sim s at 1×`;
+
+  bodyA.massValue = bodyAMass;
+  bodyA.angle = Math.atan2(relativeY, relativeX);
+  bodyA.omega = meanMotion;
+  bodyA.orbitRadiusPx = radii.bodyA;
+  bodyA.distanceValue = (currentSeparation * bodyAFraction) / BINARY_SEMIMAJOR_AXIS_PX;
+  bodyA.periodLabel = periodLabel;
+  bodyA.position = {
+    x: center.x + relativeX * bodyAFraction,
+    y: center.y + relativeY * bodyAFraction
+  };
+  bodyA.velocity = {
+    x: relativeVx * bodyAFraction * timeScale,
+    y: relativeVy * bodyAFraction * timeScale
+  };
+  bodyA.acceleration = {
+    x: relativeAx * bodyAFraction,
+    y: relativeAy * bodyAFraction
+  };
+
+  bodyB.massValue = bodyBMass;
+  bodyB.angle = bodyA.angle + Math.PI;
+  bodyB.omega = meanMotion;
+  bodyB.orbitRadiusPx = radii.bodyB;
+  bodyB.distanceValue = (currentSeparation * bodyBFraction) / BINARY_SEMIMAJOR_AXIS_PX;
+  bodyB.periodLabel = periodLabel;
+  bodyB.position = {
+    x: center.x - relativeX * bodyBFraction,
+    y: center.y - relativeY * bodyBFraction
+  };
+  bodyB.velocity = {
+    x: -relativeVx * bodyBFraction * timeScale,
+    y: -relativeVy * bodyBFraction * timeScale
+  };
+  bodyB.acceleration = {
+    x: -relativeAx * bodyBFraction,
+    y: -relativeAy * bodyBFraction
+  };
+}
+
+function buildBinaryBodies(
+  center: Vec2,
+  bodyAMass: number,
+  bodyBMass: number,
+  eccentricity: number,
+  meanAnomaly: number,
+  timeScale: number
+): NamedBody[] {
+  const bodies: NamedBody[] = [
+    {
+      id: "binary-a",
+      name: "Planet A",
+      shortLabel: "A",
+      description:
+        "Planet A orbits the shared focus. Give it more mass and its own ellipse becomes smaller.",
+      visual: "earth",
+      isCenter: false,
+      drawRadius: 18,
+      distanceValue: 0,
+      distanceUnit: "relative",
+      periodLabel: "",
+      position: { ...center },
+      velocity: { x: 0, y: 0 },
+      acceleration: { x: 0, y: 0 },
+      trail: [],
+      angle: meanAnomaly,
+      omega: 0,
+      orbitRadiusPx: 0
+    },
+    {
+      id: "binary-b",
+      name: "Planet B",
+      shortLabel: "B",
+      description:
+        "Planet B orbits the same shared focus on the opposite side. The lighter world always travels on the wider path.",
+      visual: "mars",
+      isCenter: false,
+      drawRadius: 16,
+      distanceValue: 0,
+      distanceUnit: "relative",
+      periodLabel: "",
+      position: { ...center },
+      velocity: { x: 0, y: 0 },
+      acceleration: { x: 0, y: 0 },
+      trail: [],
+      angle: meanAnomaly + Math.PI,
+      omega: 0,
+      orbitRadiusPx: 0
+    }
+  ];
+  placeBinaryBodies(
+    bodies,
+    center,
+    bodyAMass,
+    bodyBMass,
+    eccentricity,
+    meanAnomaly,
+    timeScale
+  );
+  return bodies;
 }
 
 /** Schematic radii (km). Craft are heavily exaggerated so they stay pickable up close. */
@@ -467,6 +683,10 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
   let bodies: NamedBody[] = [];
   let earthPitch: EarthPitchState | null = null;
   let historic: HistoricRuntime | null = null;
+  let binaryBodyAMass = 3;
+  let binaryBodyBMass = 1;
+  let binaryEccentricity = 0.35;
+  let binaryMeanAnomaly = 0.7;
 
   function historicMaxOrbitPx(): number {
     return Math.min(LOGICAL_WIDTH, LOGICAL_HEIGHT) * 0.42;
@@ -542,6 +762,20 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
       particles = createInitialParticles(center, centerMass, particleCount);
       return;
     }
+    if (next === "binary-system") {
+      binaryMeanAnomaly = 0.7;
+      particles = [];
+      bodies = buildBinaryBodies(
+        center,
+        binaryBodyAMass,
+        binaryBodyBMass,
+        binaryEccentricity,
+        binaryMeanAnomaly,
+        timeScale
+      );
+      selectedBodyId = "binary-a";
+      return;
+    }
     if (next === "earth-pitch") {
       bodies = [];
       particles = [];
@@ -592,6 +826,10 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
   }
 
   function stepScenario(clampedDt: number): void {
+    if (scenario === "binary-system") {
+      stepBinarySystem(clampedDt);
+      return;
+    }
     if (scenario === "near-earth") {
       stepNearEarth(clampedDt);
       return;
@@ -622,6 +860,23 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
       const w2 = body.omega * body.omega;
       body.acceleration = { x: dx * w2, y: dy * w2 };
       addTrailPoint(body.trail, body.position, TRAIL_LENGTH);
+    }
+  }
+
+  function stepBinarySystem(clampedDt: number): void {
+    const period = binaryPeriodSeconds(binaryBodyAMass, binaryBodyBMass);
+    binaryMeanAnomaly += ((Math.PI * 2) / period) * clampedDt * timeScale;
+    placeBinaryBodies(
+      bodies,
+      center,
+      binaryBodyAMass,
+      binaryBodyBMass,
+      binaryEccentricity,
+      binaryMeanAnomaly,
+      timeScale
+    );
+    for (const body of bodies) {
+      addTrailPoint(body.trail, body.position, BINARY_TRAIL_LENGTH);
     }
   }
 
@@ -703,6 +958,41 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
     },
     setSelfGravity(enabled: boolean): void {
       selfGravityEnabled = enabled;
+    },
+    setBinaryMasses(bodyAMass: number, bodyBMass: number): void {
+      binaryBodyAMass = clamp(bodyAMass, BINARY_MASS_MIN, BINARY_MASS_MAX);
+      binaryBodyBMass = clamp(bodyBMass, BINARY_MASS_MIN, BINARY_MASS_MAX);
+      if (scenario === "binary-system") {
+        for (const body of bodies) {
+          body.trail = [];
+        }
+        placeBinaryBodies(
+          bodies,
+          center,
+          binaryBodyAMass,
+          binaryBodyBMass,
+          binaryEccentricity,
+          binaryMeanAnomaly,
+          timeScale
+        );
+      }
+    },
+    setBinaryEccentricity(eccentricity: number): void {
+      binaryEccentricity = clamp(eccentricity, 0, BINARY_ECCENTRICITY_MAX);
+      if (scenario === "binary-system") {
+        for (const body of bodies) {
+          body.trail = [];
+        }
+        placeBinaryBodies(
+          bodies,
+          center,
+          binaryBodyAMass,
+          binaryBodyBMass,
+          binaryEccentricity,
+          binaryMeanAnomaly,
+          timeScale
+        );
+      }
     },
     setViewHalfWidthKm(km: number): void {
       viewHalfWidthKm = clamp(km, NEAR_EARTH_VIEW_MIN_KM, NEAR_EARTH_VIEW_MAX_KM);
@@ -792,6 +1082,8 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
       let distanceLabel: string;
       if (body.isCenter) {
         distanceLabel = "center";
+      } else if (scenario === "binary-system") {
+        distanceLabel = `${(body.distanceValue * 100).toFixed(1)}% of the relative semimajor axis from the barycenter now`;
       } else if (scenario === "near-earth" && body.id === "earth") {
         distanceLabel = `${formatDistance(AU_KM, "km")} from Sun`;
       } else if (scenario === "near-earth") {
@@ -810,7 +1102,11 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
         description: body.description,
         distanceLabel,
         periodLabel: body.periodLabel,
-        speedLabel: scenario === "playground" ? `${speed.toFixed(1)}` : body.periodLabel
+        speedLabel: scenario === "playground" ? `${speed.toFixed(1)}` : body.periodLabel,
+        massLabel:
+          scenario === "binary-system" && body.massValue != null
+            ? `${body.massValue.toFixed(1)} relative mass units`
+            : undefined
       };
     },
     getSelectedBody(): NamedBody | null {
@@ -860,6 +1156,47 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
         earthPitch: earthPitch,
         historicModel: historic?.model ?? null,
         historicGuides: historic?.guides ?? [],
+        binarySystem:
+          scenario === "binary-system"
+            ? (() => {
+                const radii = binaryOrbitRadii(binaryBodyAMass, binaryBodyBMass);
+                const bodyA = bodyById(bodies, "binary-a");
+                const bodyB = bodyById(bodies, "binary-b");
+                const totalMass = binaryBodyAMass + binaryBodyBMass;
+                return {
+                  bodyAMass: binaryBodyAMass,
+                  bodyBMass: binaryBodyBMass,
+                  eccentricity: binaryEccentricity,
+                  separationPx: BINARY_SEMIMAJOR_AXIS_PX,
+                  currentSeparationPx:
+                    Math.hypot(
+                      (bodyA?.position.x ?? center.x) - (bodyB?.position.x ?? center.x),
+                      (bodyA?.position.y ?? center.y) - (bodyB?.position.y ?? center.y)
+                    ),
+                  periapsisSeparationPx:
+                    BINARY_SEMIMAJOR_AXIS_PX * (1 - binaryEccentricity),
+                  apoapsisSeparationPx:
+                    BINARY_SEMIMAJOR_AXIS_PX * (1 + binaryEccentricity),
+                  bodyAOrbitRadiusPx: radii.bodyA,
+                  bodyBOrbitRadiusPx: radii.bodyB,
+                  orbitalPeriodSeconds: binaryPeriodSeconds(binaryBodyAMass, binaryBodyBMass),
+                  barycenter: { ...center },
+                  sweepPeriodFraction: BINARY_SWEEP_PERIOD_FRACTION,
+                  bodyASweptPath: binarySweptPath(
+                    center,
+                    binaryMeanAnomaly,
+                    binaryEccentricity,
+                    binaryBodyBMass / totalMass
+                  ),
+                  bodyBSweptPath: binarySweptPath(
+                    center,
+                    binaryMeanAnomaly,
+                    binaryEccentricity,
+                    -binaryBodyAMass / totalMass
+                  )
+                } satisfies BinarySystemSnapshot;
+              })()
+            : null,
         totalKineticEnergy,
         averageSpeed: speedCount > 0 ? speedSum / speedCount : 0,
         note:
@@ -874,6 +1211,19 @@ export function createGravityOrbitSim(initial: GravitySettings): GravityOrbitSim
       }
       if (scenario === "earth-pitch" && earthPitch) {
         resetEarthPitchBall(earthPitch);
+        return;
+      }
+      if (scenario === "binary-system") {
+        binaryMeanAnomaly = 0.7;
+        bodies = buildBinaryBodies(
+          center,
+          binaryBodyAMass,
+          binaryBodyBMass,
+          binaryEccentricity,
+          binaryMeanAnomaly,
+          timeScale
+        );
+        selectedBodyId = "binary-a";
         return;
       }
       if (scenario === "historic-models" && historic) {

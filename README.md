@@ -4,6 +4,10 @@ Standalone GitHub Pages build of the gravity-orbit applet from [physics_demos](h
 
 Live: https://martinalvarezsergio.github.io/gravity_orbit_playground/
 
+Includes a two-body mode with independently adjustable masses and eccentricity, Keplerian
+speed changes, longer orbital trails, a visible shared barycentric focus, and an optional
+equal-time swept-area overlay for Kepler’s second law.
+
 ```bash
 npm install
 npm run dev

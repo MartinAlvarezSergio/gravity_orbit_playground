@@ -1,9 +1,10 @@
-import { BodyVisualKind } from "./types";
+import { BodyVisualKind, GravityCanvasTheme } from "./types";
 import { worldToScreen, type CameraView } from "./camera";
 
 type DrawBodyOptions = {
   selected?: boolean;
   label?: string;
+  theme?: GravityCanvasTheme;
   /**
    * Direction from the body toward the Sun (world space). When set for Earth/Moon in
    * near-Earth mode, paints a schematic night-side terminator (top-down orbital view).
@@ -44,7 +45,8 @@ function drawLabel(
   y: number,
   r: number,
   label: string | undefined,
-  selected: boolean
+  selected: boolean,
+  theme: GravityCanvasTheme
 ): void {
   if (!label) {
     return;
@@ -53,8 +55,16 @@ function drawLabel(
   ctx.font = selected ? "600 12px system-ui, sans-serif" : "500 11px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillStyle = selected ? "#fff6d5" : "rgba(236, 244, 255, 0.92)";
-  ctx.strokeStyle = "rgba(8, 12, 20, 0.75)";
+  ctx.fillStyle =
+    theme === "light"
+      ? selected
+        ? "#684600"
+        : "#19314e"
+      : selected
+        ? "#fff6d5"
+        : "rgba(236, 244, 255, 0.92)";
+  ctx.strokeStyle =
+    theme === "light" ? "rgba(255, 255, 255, 0.94)" : "rgba(8, 12, 20, 0.75)";
   ctx.lineWidth = 3;
   ctx.strokeText(label, x, y + r + 4);
   ctx.fillText(label, x, y + r + 4);
@@ -66,13 +76,14 @@ function drawSelectionRing(
   x: number,
   y: number,
   r: number,
-  selected: boolean
+  selected: boolean,
+  theme: GravityCanvasTheme
 ): void {
   if (!selected) {
     return;
   }
   ctx.save();
-  ctx.strokeStyle = "rgba(255, 220, 120, 0.95)";
+  ctx.strokeStyle = theme === "light" ? "rgba(157, 101, 0, 0.98)" : "rgba(255, 220, 120, 0.95)";
   ctx.lineWidth = 2;
   ctx.setLineDash([4, 3]);
   ctx.beginPath();
@@ -345,15 +356,22 @@ export function drawNamedBody(
   radius: number,
   options: DrawBodyOptions = {}
 ): void {
+  const theme = options.theme ?? "dark";
   if (visual === "particle") {
-    drawDisc(ctx, x, y, radius, "rgba(232, 246, 255, 0.95)");
+    drawDisc(
+      ctx,
+      x,
+      y,
+      radius,
+      theme === "light" ? "rgba(24, 52, 86, 0.92)" : "rgba(232, 246, 255, 0.95)"
+    );
     return;
   }
   DRAWERS[visual](ctx, x, y, radius);
   if (options.lightToSun && (visual === "earth" || visual === "moon")) {
     drawNightHemisphere(ctx, x, y, radius, options.lightToSun.x, options.lightToSun.y);
   }
-  drawSelectionRing(ctx, x, y, radius, Boolean(options.selected));
+  drawSelectionRing(ctx, x, y, radius, Boolean(options.selected), theme);
 
   if (!options.label) {
     return;
@@ -364,9 +382,17 @@ export function drawNamedBody(
     const screenR = radius * options.camera.zoom;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    drawLabel(ctx, screen.x, screen.y, screenR, options.label, Boolean(options.selected));
+    drawLabel(
+      ctx,
+      screen.x,
+      screen.y,
+      screenR,
+      options.label,
+      Boolean(options.selected),
+      theme
+    );
     ctx.restore();
     return;
   }
-  drawLabel(ctx, x, y, radius, options.label, Boolean(options.selected));
+  drawLabel(ctx, x, y, radius, options.label, Boolean(options.selected), theme);
 }

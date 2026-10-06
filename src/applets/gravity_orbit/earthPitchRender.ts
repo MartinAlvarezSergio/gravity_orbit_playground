@@ -3,15 +3,26 @@ import {
   type EarthPitchState,
   type PitchRegime
 } from "./earthPitch";
+import type { GravityCanvasTheme } from "./types";
 
-function drawAtmosphere(ctx: CanvasRenderingContext2D, state: EarthPitchState, flatness: number): void {
+function drawAtmosphere(
+  ctx: CanvasRenderingContext2D,
+  state: EarthPitchState,
+  flatness: number,
+  theme: GravityCanvasTheme
+): void {
   if (flatness > 0.85) {
     return;
   }
   const { earthCenter: c, earthRadius: r } = state;
   const glow = ctx.createRadialGradient(c.x, c.y, r * 0.92, c.x, c.y, r * 1.35);
   glow.addColorStop(0, "rgba(120, 190, 255, 0)");
-  glow.addColorStop(0.55, `rgba(110, 180, 255, ${0.18 * (1 - flatness)})`);
+  glow.addColorStop(
+    0.55,
+    theme === "light"
+      ? `rgba(35, 105, 180, ${0.14 * (1 - flatness)})`
+      : `rgba(110, 180, 255, ${0.18 * (1 - flatness)})`
+  );
   glow.addColorStop(1, "rgba(80, 140, 255, 0)");
   ctx.fillStyle = glow;
   ctx.beginPath();
@@ -19,7 +30,11 @@ function drawAtmosphere(ctx: CanvasRenderingContext2D, state: EarthPitchState, f
   ctx.fill();
 }
 
-function drawEarth(ctx: CanvasRenderingContext2D, state: EarthPitchState): void {
+function drawEarth(
+  ctx: CanvasRenderingContext2D,
+  state: EarthPitchState,
+  theme: GravityCanvasTheme
+): void {
   const { earthCenter: c, earthRadius: r } = state;
 
   const ocean = ctx.createRadialGradient(c.x - r * 0.25, c.y - r * 0.3, r * 0.1, c.x, c.y, r);
@@ -61,7 +76,8 @@ function drawEarth(ctx: CanvasRenderingContext2D, state: EarthPitchState): void 
   ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = "rgba(200, 230, 255, 0.35)";
+  ctx.strokeStyle =
+    theme === "light" ? "rgba(23, 66, 112, 0.62)" : "rgba(200, 230, 255, 0.35)";
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
@@ -73,7 +89,8 @@ function drawFlatGroundOverlay(
   ctx: CanvasRenderingContext2D,
   state: EarthPitchState,
   flatness: number,
-  zoom: number
+  zoom: number,
+  theme: GravityCanvasTheme
 ): void {
   if (flatness < 0.08) {
     return;
@@ -114,7 +131,10 @@ function drawFlatGroundOverlay(
   ctx.fill();
 
   // Horizon line — the “rectangle” cue for a flat classroom view.
-  ctx.strokeStyle = `rgba(230, 240, 255, ${0.25 + 0.55 * flatness})`;
+  ctx.strokeStyle =
+    theme === "light"
+      ? `rgba(32, 69, 96, ${0.42 + 0.45 * flatness})`
+      : `rgba(230, 240, 255, ${0.25 + 0.55 * flatness})`;
   ctx.lineWidth = Math.max(1.2 / zoom, 0.04);
   ctx.beginPath();
   ctx.moveTo(left.x, left.y);
@@ -122,7 +142,10 @@ function drawFlatGroundOverlay(
   ctx.stroke();
 
   if (flatness > 0.55) {
-    ctx.fillStyle = `rgba(180, 210, 255, ${0.12 * flatness})`;
+    ctx.fillStyle =
+      theme === "light"
+        ? `rgba(75, 145, 205, ${0.12 * flatness})`
+        : `rgba(180, 210, 255, ${0.12 * flatness})`;
     const skyLeft = {
       x: left.x + n.x * (220 / zoom),
       y: left.y + n.y * (220 / zoom)
@@ -145,7 +168,8 @@ function drawFlatGroundOverlay(
 function drawReferenceOrbits(
   ctx: CanvasRenderingContext2D,
   state: EarthPitchState,
-  flatness: number
+  flatness: number,
+  theme: GravityCanvasTheme
 ): void {
   if (flatness > 0.35) {
     return;
@@ -156,12 +180,14 @@ function drawReferenceOrbits(
   ctx.setLineDash([5, 6]);
   ctx.lineWidth = 1.2;
 
-  ctx.strokeStyle = "rgba(140, 220, 170, 0.45)";
+  ctx.strokeStyle =
+    theme === "light" ? "rgba(0, 110, 60, 0.66)" : "rgba(140, 220, 170, 0.45)";
   ctx.beginPath();
   ctx.arc(c.x, c.y, r + 3.2, 0, Math.PI * 2);
   ctx.stroke();
 
-  ctx.strokeStyle = "rgba(180, 170, 255, 0.28)";
+  ctx.strokeStyle =
+    theme === "light" ? "rgba(91, 68, 162, 0.46)" : "rgba(180, 170, 255, 0.28)";
   ctx.beginPath();
   ctx.ellipse(c.x, c.y, r * 1.35, r * 1.05, state.launchAngle, 0, Math.PI * 2);
   ctx.stroke();
@@ -173,7 +199,8 @@ function drawReferenceOrbits(
 function drawMountainAndPitcher(
   ctx: CanvasRenderingContext2D,
   state: EarthPitchState,
-  zoom: number
+  zoom: number,
+  theme: GravityCanvasTheme
 ): void {
   const { launchPosition: p, launchNormal: n } = state;
   const inv = 1 / Math.max(zoom, 0.001);
@@ -205,7 +232,7 @@ function drawMountainAndPitcher(
   ctx.beginPath();
   ctx.arc(-2, -40, 6, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = "#e8f0ff";
+  ctx.strokeStyle = theme === "light" ? "#233b55" : "#e8f0ff";
   ctx.lineWidth = 3.5;
   ctx.lineCap = "round";
   ctx.beginPath();
@@ -227,13 +254,35 @@ function drawMountainAndPitcher(
   ctx.fill();
 
   ctx.font = "600 12px system-ui, sans-serif";
-  ctx.fillStyle = "rgba(255, 245, 220, 0.95)";
+  ctx.fillStyle = theme === "light" ? "rgba(31, 52, 76, 0.96)" : "rgba(255, 245, 220, 0.95)";
   ctx.textAlign = "center";
   ctx.fillText("pitcher", 0, -54);
   ctx.restore();
 }
 
-function trailColor(regime: PitchRegime, flying: boolean): string {
+function trailColor(
+  regime: PitchRegime,
+  flying: boolean,
+  theme: GravityCanvasTheme
+): string {
+  if (theme === "light") {
+    if (!flying) {
+      return "rgba(174, 55, 24, 0.74)";
+    }
+    switch (regime) {
+      case "everyday":
+      case "suborbital":
+        return "rgba(161, 87, 0, 0.82)";
+      case "circular":
+        return "rgba(0, 112, 62, 0.82)";
+      case "elliptical":
+        return "rgba(88, 62, 159, 0.82)";
+      case "hyperbolic":
+        return "rgba(0, 98, 156, 0.86)";
+      default:
+        return "rgba(37, 71, 112, 0.72)";
+    }
+  }
   if (!flying) {
     return "rgba(255, 160, 120, 0.55)";
   }
@@ -257,14 +306,15 @@ function drawBall(
   ctx: CanvasRenderingContext2D,
   state: EarthPitchState,
   showTrail: boolean,
-  zoom: number
+  zoom: number,
+  theme: GravityCanvasTheme
 ): void {
   const { ball, regime } = state;
   const inv = 1 / Math.max(zoom, 0.001);
 
   if (showTrail && ball.trail.length > 1) {
     ctx.save();
-    ctx.strokeStyle = trailColor(regime, ball.flying);
+    ctx.strokeStyle = trailColor(regime, ball.flying, theme);
     ctx.lineWidth = Math.max(2 * inv, 0.03);
     ctx.lineJoin = "round";
     ctx.beginPath();
@@ -308,7 +358,8 @@ function drawVectors(
   state: EarthPitchState,
   showVelocity: boolean,
   showForce: boolean,
-  zoom: number
+  zoom: number,
+  theme: GravityCanvasTheme
 ): void {
   const { ball } = state;
   if (!ball.flying) {
@@ -316,20 +367,20 @@ function drawVectors(
   }
   const inv = 1 / Math.max(zoom, 0.001);
   if (showForce) {
-    ctx.strokeStyle = "rgba(255, 140, 110, 0.9)";
-    ctx.fillStyle = "rgba(255, 140, 110, 0.9)";
+    ctx.strokeStyle = theme === "light" ? "rgba(190, 55, 18, 0.98)" : "rgba(255, 140, 110, 0.9)";
+    ctx.fillStyle = ctx.strokeStyle;
     drawArrow(
       ctx,
       ball.position.x,
       ball.position.y,
-      ball.acceleration.x * 0.02 * inv * zoom * 0.35,
-      ball.acceleration.y * 0.02 * inv * zoom * 0.35,
+      ball.acceleration.x * 0.02 * inv * zoom * 0.45,
+      ball.acceleration.y * 0.02 * inv * zoom * 0.45,
       inv
     );
   }
   if (showVelocity) {
-    ctx.strokeStyle = "rgba(110, 220, 170, 0.9)";
-    ctx.fillStyle = "rgba(110, 220, 170, 0.9)";
+    ctx.strokeStyle = theme === "light" ? "rgba(0, 112, 62, 0.98)" : "rgba(110, 220, 170, 0.9)";
+    ctx.fillStyle = ctx.strokeStyle;
     // Keep velocity arrows readable at high zoom for slow pitches.
     const scale = Math.max(0.18, 0.55 * inv * 8);
     drawArrow(
@@ -378,22 +429,24 @@ export function renderEarthPitchWorld(
     showForceVectors: boolean;
     showTrails: boolean;
     zoom: number;
+    theme: GravityCanvasTheme;
   }
 ): void {
   const zoom = Math.max(options.zoom, 0.001);
   const flatness = earthPitchFlatness(zoom);
 
-  drawAtmosphere(ctx, state, flatness);
-  drawReferenceOrbits(ctx, state, flatness);
-  drawEarth(ctx, state);
-  drawFlatGroundOverlay(ctx, state, flatness, zoom);
-  drawMountainAndPitcher(ctx, state, zoom);
-  drawBall(ctx, state, options.showTrails, zoom);
+  drawAtmosphere(ctx, state, flatness, options.theme);
+  drawReferenceOrbits(ctx, state, flatness, options.theme);
+  drawEarth(ctx, state, options.theme);
+  drawFlatGroundOverlay(ctx, state, flatness, zoom, options.theme);
+  drawMountainAndPitcher(ctx, state, zoom, options.theme);
+  drawBall(ctx, state, options.showTrails, zoom, options.theme);
   drawVectors(
     ctx,
     state,
     options.showVelocityVectors,
     options.showForceVectors,
-    zoom
+    zoom,
+    options.theme
   );
 }

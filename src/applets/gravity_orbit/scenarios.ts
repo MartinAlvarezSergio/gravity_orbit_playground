@@ -20,7 +20,7 @@ export type ScenarioDefinition = {
   title: string;
   summary: string;
   note: string;
-  distanceUnit: "AU" | "km" | null;
+  distanceUnit: "AU" | "km" | "relative" | null;
   bodies: ScenarioBodyDef[];
 };
 
@@ -206,6 +206,15 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
     distanceUnit: null,
     bodies: []
   },
+  "binary-system": {
+    id: "binary-system",
+    title: "Two bodies and their shared center",
+    summary: "Change two masses and eccentricity, then watch both worlds orbit their shared focus.",
+    note:
+      "Keplerian two-body model with a fixed semimajor axis. Eccentricity 0 makes a circle; larger values stretch the orbit, speed the worlds up near closest approach, and slow them near the far end. The barycenter remains their shared focus.",
+    distanceUnit: "relative",
+    bodies: []
+  },
   "solar-system": {
     id: "solar-system",
     title: "Solar System",
@@ -248,6 +257,7 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
 };
 
 export const SCENARIO_OPTIONS: { id: ScenarioId; label: string }[] = [
+  { id: "binary-system", label: "Two-body orbit · shared center of mass" },
   { id: "playground", label: "Particle playground" },
   { id: "solar-system", label: "Solar System" },
   { id: "near-earth", label: "Earth · Moon · ISS · JWST" },
@@ -277,7 +287,10 @@ export function omegaFromPeriodDays(periodDays: number): number {
   return (Math.PI * 2) / periodSimSeconds;
 }
 
-export function formatDistance(value: number, unit: "AU" | "km"): string {
+export function formatDistance(value: number, unit: "AU" | "km" | "relative"): string {
+  if (unit === "relative") {
+    return `${(value * 100).toFixed(1)}% of separation`;
+  }
   if (unit === "AU") {
     return `${value.toFixed(value >= 10 ? 1 : 3)} AU`;
   }
